@@ -1,0 +1,9 @@
+## Interface: 120000
+## Title: Profession Side Tabs
+## Notes: Adds tabs to the right side of the professions window to switch between professions. command: /pst ?
+## Author: BlueRaven
+## Version: 1.0.0
+## IconTexture: Interface\AddOns\ProfessionSideTabs\PSTicon.png
+## SavedVariables: ProfessionSideTabsDB
+
+ProfessionSideTabs.lua
