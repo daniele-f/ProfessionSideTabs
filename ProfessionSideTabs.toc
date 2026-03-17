@@ -3,7 +3,7 @@
 ## Notes: Adds tabs to the right side of the professions window to switch between professions. command: /pst ?
 ## Author: BlueRaven
 ## Version: 1.0.0
-## IconTexture: Interface\AddOns\ProfessionSideTabs\PSTicon.png
+## IconTexture: Interface\AddOns\ProfessionSideTabs\assets\PSTicon.png
 ## SavedVariables: ProfessionSideTabsDB
 
 ProfessionSideTabs.lua
