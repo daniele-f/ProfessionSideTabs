@@ -1,4 +1,4 @@
-## Interface: 120000
+## Interface: 120000, 120001, 120005
 ## Title: Profession Side Tabs
 ## Notes: Adds tabs to the right side of the professions window to switch between professions. command: /pst ?
 ## Author: BlueRaven
