@@ -6,7 +6,9 @@ local buttons = {}
 local initialized = false
 
 local defaults = {
-    showArchaeology = true,
+    showArchaeology = false,
+    showFishing = true,
+    showCooking = true,
 }
 
 local function EnsureDB()
@@ -25,13 +27,30 @@ local BUTTON_SIZE = 48
 local BUTTON_GAP = 6
 local GROUP_SPACER = 14
 
-local function IsArchaeologyShown()
-    return ProfessionSideTabsDB and ProfessionSideTabsDB.showArchaeology ~= false
+local function IsSecondaryShown(slot)
+    EnsureDB()
+
+    if slot == 3 then
+        return ProfessionSideTabsDB.showArchaeology ~= false
+    elseif slot == 4 then
+        return ProfessionSideTabsDB.showFishing ~= false
+    elseif slot == 5 then
+        return ProfessionSideTabsDB.showCooking ~= false
+    end
+
+    return true
 end
 
-local function SetArchaeologyShown(value)
+local function SetSecondaryShown(slot, value)
     EnsureDB()
-    ProfessionSideTabsDB.showArchaeology = value and true or false
+
+    if slot == 3 then
+        ProfessionSideTabsDB.showArchaeology = value and true or false
+    elseif slot == 4 then
+        ProfessionSideTabsDB.showFishing = value and true or false
+    elseif slot == 5 then
+        ProfessionSideTabsDB.showCooking = value and true or false
+    end
 end
 
 local function OpenProfessionBySlot(slotNumber)
@@ -326,7 +345,7 @@ local function UpdateButtons()
     local visibleSlots = {}
 
     for slot = 1, 5 do
-        if not (slot == 3 and not IsArchaeologyShown()) then
+        if slot < 3 or IsSecondaryShown(slot) then
             local data = GetProfessionDataBySlot(slot)
             if data then
                 visibleSlots[#visibleSlots + 1] = slot
@@ -346,7 +365,7 @@ local function UpdateButtons()
             button.hoverGlow:Hide()
             button.selectedGlow:Hide()
         else
-            if slot == 3 and not IsArchaeologyShown() then
+            if slot >= 3 and not IsSecondaryShown(slot) then
                 button.slotNumber = nil
                 button.professionData = nil
                 button:Hide()
@@ -453,23 +472,53 @@ SlashCmdList["PROFESSIONSIDETABS"] = function(msg)
 
     local cmd, arg = msg:match("^(%S+)%s*(%S*)$")
 
-    if cmd == "archy" then
+    local function Apply(slot, name)
         if arg == "hide" then
-            SetArchaeologyShown(false)
-            print("|cff00ff98PST|r: Archaeology button hidden")
-            UpdateButtons()
-            return
+            SetSecondaryShown(slot, false)
+            print("|cff00ff98PST|r: " .. name .. " hidden")
         elseif arg == "show" then
-            SetArchaeologyShown(true)
-            print("|cff00ff98PST|r: Archaeology button shown")
-            UpdateButtons()
+            SetSecondaryShown(slot, true)
+            print("|cff00ff98PST|r: " .. name .. " shown")
+        else
+            print("|cff00ff98PST|r usage: /pst " .. name:lower() .. " show/hide")
             return
         end
 
-        print("|cff00ff98PST|r usage: /pst archy show/hide")
+        UpdateButtons()
+    end
+
+    if cmd == "archy" or cmd == "archaeology" then
+        Apply(3, "Archaeology")
+        return
+    elseif cmd == "fishing" then
+        Apply(4, "Fishing")
+        return
+    elseif cmd == "cooking" then
+        Apply(5, "Cooking")
+        return
+    elseif cmd == "secondary" then
+        if arg == "hide" then
+            SetSecondaryShown(3, false)
+            SetSecondaryShown(4, false)
+            SetSecondaryShown(5, false)
+            print("|cff00ff98PST|r: All secondary professions hidden")
+        elseif arg == "show" then
+            SetSecondaryShown(3, true)
+            SetSecondaryShown(4, true)
+            SetSecondaryShown(5, true)
+            print("|cff00ff98PST|r: All secondary professions shown")
+        else
+            print("|cff00ff98PST|r usage: /pst secondary show/hide")
+            return
+        end
+
+        UpdateButtons()
         return
     end
 
     print("|cff00ff98PST|r commands:")
     print("|cff00ff98PST|r /pst archy show/hide")
+    print("|cff00ff98PST|r /pst fishing show/hide")
+    print("|cff00ff98PST|r /pst cooking show/hide")
+    print("|cff00ff98PST|r /pst secondary show/hide")
 end
