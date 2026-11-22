@@ -3,7 +3,8 @@ local addon = CreateFrame("Frame")
 
 local settingsCategory
 local openStandaloneSettings
-local showBookCheckbox
+local windowCheckboxes = {}
+local pendingArchaeologyOpen
 local primaryProfessions = {}
 local settingsCheckboxes = {}
 
@@ -17,8 +18,15 @@ local TOP_INSET = 74
 local BOTTOM_INSET = 32
 
 local craftingPanel = { frameName = "ProfessionsFrame", suffix = "", topInset = TOP_INSET, bottomInset = BOTTOM_INSET }
-local bookPanel = { frameName = "ProfessionsBookFrame", suffix = "Book", topInset = 27, bottomInset = 6 }
-local panels = { craftingPanel, bookPanel }
+local bookPanel = {
+    frameName = "ProfessionsBookFrame", suffix = "Book", topInset = 27, bottomInset = 6,
+    option = "showProfessionsBook", optionLabel = "Show tabs on the Professions overview",
+}
+local archaeologyPanel = {
+    frameName = "ArchaeologyFrame", suffix = "Archaeology", topInset = 186, bottomInset = 9,
+    option = "showArchaeologyPanel", optionLabel = "Show tabs on the Archaeology panel",
+}
+local panels = { craftingPanel, bookPanel, archaeologyPanel }
 
 local tabStyles = {
     Panel = { width = BUTTON_SIZE, height = BUTTON_SIZE, gap = BUTTON_GAP, left = 9, groupGap = GROUP_SPACER },
@@ -49,8 +57,10 @@ local function EnsureDB()
     if not tabStyles[ProfessionSideTabsDB.tabStyle] then
         ProfessionSideTabsDB.tabStyle = "Panel"
     end
-    if ProfessionSideTabsDB.showProfessionsBook == nil then
-        ProfessionSideTabsDB.showProfessionsBook = false
+    for _, panel in ipairs(panels) do
+        if panel.option and ProfessionSideTabsDB[panel.option] == nil then
+            ProfessionSideTabsDB[panel.option] = false
+        end
     end
 
     local position = ProfessionSideTabsDB.panelPosition
@@ -84,6 +94,63 @@ local function IsSecondaryShown(slot)
     return ProfessionSideTabsDB[secondaryProfessions[slot].key] ~= false
 end
 
+local function GetCurrentOpenSkillLine()
+    if not C_TradeSkillUI or not C_TradeSkillUI.GetBaseProfessionInfo then
+        return nil
+    end
+
+    local info = C_TradeSkillUI.GetBaseProfessionInfo()
+    return info and info.professionID
+end
+
+local function CloseArchaeology()
+    if ArchaeologyFrame and ArchaeologyFrame:IsShown() then
+        HideUIPanel(ArchaeologyFrame)
+        return ArchaeologyFrame
+    end
+end
+
+local function OpenArchaeology()
+    if not ArchaeologyFrame then
+        C_AddOns.LoadAddOn("Blizzard_ArchaeologyUI")
+    end
+    if not ArchaeologyFrame or ArchaeologyFrame:IsShown() then
+        return
+    end
+
+    local previousSkillLine
+    local function ShowArchaeology()
+        local overview = ProfessionsBookFrame
+        local wasOverviewOpen = overview and overview:IsShown()
+        if wasOverviewOpen then
+            overview:Hide()
+        end
+
+        ShowUIPanel(ArchaeologyFrame)
+        if not ArchaeologyFrame:IsShown() then
+            if previousSkillLine then
+                C_TradeSkillUI.OpenTradeSkill(previousSkillLine)
+            end
+            if wasOverviewOpen then
+                overview:Show()
+            end
+        end
+    end
+
+    if ProfessionsFrame and ProfessionsFrame:IsShown() then
+        previousSkillLine = GetCurrentOpenSkillLine()
+        ProfessionsFrame:CheckConfirmClose()
+        if ProfessionsFrame:IsShown() then
+            if StaticPopup_Visible("PROFESSIONS_SPECIALIZATION_CONFIRM_CLOSE") then
+                pendingArchaeologyOpen = ShowArchaeology
+            end
+            return
+        end
+    end
+
+    ShowArchaeology()
+end
+
 local function OpenProfessionBySlot(slotNumber)
     local professionIndex = select(slotNumber, GetProfessions())
     if not professionIndex then
@@ -95,23 +162,39 @@ local function OpenProfessionBySlot(slotNumber)
         return
     end
 
+    if slotNumber == 3 then
+        OpenArchaeology()
+        return
+    end
+
+    local archaeology = CloseArchaeology()
     local overview = ProfessionsBookFrame
     local wasOverviewOpen = overview and overview:IsShown()
     if wasOverviewOpen then
         overview:Hide()
     end
 
-    if not C_TradeSkillUI.OpenTradeSkill(skillLine) and wasOverviewOpen then
-        overview:Show()
+    if not C_TradeSkillUI.OpenTradeSkill(skillLine) then
+        if archaeology then
+            ShowUIPanel(archaeology)
+        end
+        if wasOverviewOpen then
+            overview:Show()
+        end
     end
 end
 
 local function OpenProfessionsOverview()
+    local archaeology = CloseArchaeology()
     if not ProfessionsBookFrame or not ProfessionsBookFrame:IsShown() then
         ToggleProfessionsBook()
     end
 
-    if ProfessionsBookFrame and ProfessionsBookFrame:IsShown() and ProfessionsFrame and ProfessionsFrame:IsShown() then
+    if not ProfessionsBookFrame or not ProfessionsBookFrame:IsShown() then
+        if archaeology then
+            ShowUIPanel(archaeology)
+        end
+    elseif ProfessionsFrame and ProfessionsFrame:IsShown() then
         ProfessionsFrame:CheckConfirmClose()
     end
 end
@@ -163,8 +246,8 @@ local function SetProfessionShown(slot, shown)
 end
 
 local function RefreshSettingsCheckboxes()
-    if showBookCheckbox then
-        showBookCheckbox:SetChecked(ProfessionSideTabsDB.showProfessionsBook)
+    for option, checkbox in pairs(windowCheckboxes) do
+        checkbox:SetChecked(ProfessionSideTabsDB[option])
     end
     for slot, checkbox in ipairs(settingsCheckboxes) do
         if slot <= 2 then
@@ -181,19 +264,6 @@ local function RefreshSettingsCheckboxes()
             checkbox:SetChecked(IsSecondaryShown(slot))
         end
     end
-end
-
-local function GetCurrentOpenSkillLine()
-    if not C_TradeSkillUI or not C_TradeSkillUI.GetBaseProfessionInfo then
-        return nil
-    end
-
-    local info = C_TradeSkillUI.GetBaseProfessionInfo()
-    if info and info.professionID then
-        return info.professionID
-    end
-
-    return nil
 end
 
 local function UpdateButtonTooltip(self)
@@ -474,6 +544,11 @@ local function EnsurePanel(panel, refresh)
     frame:HookScript("OnSizeChanged", refresh)
     frame:HookScript("OnHide", function()
         container:Hide()
+        if panel == craftingPanel and pendingArchaeologyOpen then
+            local openAfterClose = pendingArchaeologyOpen
+            pendingArchaeologyOpen = nil
+            C_Timer.After(0, openAfterClose)
+        end
     end)
 end
 
@@ -530,7 +605,7 @@ end
 
 local function UpdatePanel(panel, professions, currentSkillLine, style)
     local container = panel.container
-    if not panel.frame:IsShown() or (panel == bookPanel and not ProfessionSideTabsDB.showProfessionsBook) then
+    if not panel.frame:IsShown() or (panel.option and not ProfessionSideTabsDB[panel.option]) then
         container:Hide()
         return
     end
@@ -555,7 +630,9 @@ local function UpdatePanel(panel, professions, currentSkillLine, style)
             button.professionData = data
             button.icon:SetTexture(data.icon or 134400)
             button:Show()
-            UpdateButtonState(button, panel == craftingPanel and currentSkillLine == data.skillLine)
+            local isSelected = (panel == craftingPanel and currentSkillLine == data.skillLine)
+                or (panel == archaeologyPanel and slot == 3)
+            UpdateButtonState(button, isSelected)
             anyButtonShown = true
         else
             button.slotNumber = nil
@@ -601,7 +678,7 @@ end
 local function CreateStandaloneSettingsWindow(title)
     local window = CreateFrame("Frame", nil, UIParent, "ButtonFrameTemplate")
     window:Hide()
-    window:SetSize(420, 532)
+    window:SetSize(420, 562)
     window:SetPoint("CENTER", UIParent, "CENTER")
     window:SetFrameStrata("DIALOG")
     window:EnableMouse(true)
@@ -682,11 +759,15 @@ local function RegisterSettings()
         end)
     end
 
-    AddSectionHeading("Professions Overview")
-    showBookCheckbox = AddCheckbox("Show tabs on the Professions overview", function(self)
-        ProfessionSideTabsDB.showProfessionsBook = not not self:GetChecked()
-        UpdateButtons()
-    end)
+    AddSectionHeading("Additional Windows")
+    for _, panel in ipairs(panels) do
+        if panel.option then
+            windowCheckboxes[panel.option] = AddCheckbox(panel.optionLabel, function(self)
+                ProfessionSideTabsDB[panel.option] = not not self:GetChecked()
+                UpdateButtons()
+            end)
+        end
+    end
 
     AddSectionHeading("Primary Professions")
     for slot = 1, 2 do
@@ -754,7 +835,11 @@ local function RegisterSettings()
             ProfessionSideTabsDB[profession.key] = profession.default
         end
         ProfessionSideTabsDB.panelPosition = DEFAULT_PANEL_POSITION
-        ProfessionSideTabsDB.showProfessionsBook = false
+        for _, panel in ipairs(panels) do
+            if panel.option then
+                ProfessionSideTabsDB[panel.option] = false
+            end
+        end
         ProfessionSideTabsDB.tabStyle = "Panel"
         slider:SetValue(DEFAULT_PANEL_POSITION)
         styleDropdown:SetText("Panel")
@@ -826,7 +911,9 @@ addon:SetScript("OnEvent", function(self, event, loadedAddon)
     end
 
     if event == "ADDON_LOADED" then
-        if loadedAddon == "Blizzard_Professions" or loadedAddon == "Blizzard_ProfessionsBook" then
+        if loadedAddon == "Blizzard_Professions" or loadedAddon == "Blizzard_ProfessionsBook"
+            or loadedAddon == "Blizzard_ArchaeologyUI"
+        then
             UpdateButtons()
         end
         return
