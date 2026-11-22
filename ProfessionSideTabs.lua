@@ -691,7 +691,7 @@ end
 local function CreateStandaloneSettingsWindow(title)
     local window = CreateFrame("Frame", nil, UIParent, "ButtonFrameTemplate")
     window:Hide()
-    window:SetSize(420, 610)
+    window:SetSize(460, 610)
     window:SetPoint("CENTER", UIParent, "CENTER")
     window:SetFrameStrata("DIALOG")
     window:EnableMouse(true)
@@ -737,23 +737,26 @@ local function RegisterSettings()
     end
     DockSettingsPage()
 
+    local headingX = 24
+    local indent = 20
+    local optionX = headingX + indent
     local y = -20
 
-    local function AddText(text, font)
+    local function AddText(text, font, x)
         local label = page:CreateFontString(nil, "ARTWORK", font)
-        label:SetPoint("TOPLEFT", 24, y)
+        label:SetPoint("TOPLEFT", x, y)
         label:SetText(text)
         y = y - 24
     end
 
     local function AddSectionHeading(title)
         y = y - 16
-        AddText(title, "GameFontNormal")
+        AddText(title, "GameFontNormal", headingX)
     end
 
     local function AddCheckbox(label, onClick)
         local checkbox = CreateFrame("CheckButton", nil, page, "UICheckButtonTemplate")
-        checkbox:SetPoint("TOPLEFT", 24, y)
+        checkbox:SetPoint("TOPLEFT", optionX, y)
         checkbox:SetSize(26, 26)
         checkbox.label = checkbox:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
         checkbox.label:SetPoint("LEFT", checkbox, "RIGHT", 4, 0)
@@ -772,9 +775,9 @@ local function RegisterSettings()
         end)
     end
 
-    AddSectionHeading("Tab Style")
+    AddText("Tab Style", "GameFontNormal", headingX)
     local styleDropdown = CreateFrame("DropdownButton", nil, page, "WowStyle1DropdownTemplate")
-    styleDropdown:SetPoint("TOPLEFT", 24, y)
+    styleDropdown:SetPoint("TOPLEFT", optionX, y)
     styleDropdown:SetWidth(150)
     styleDropdown:SetText(ProfessionSideTabsDB.tabStyle)
     styleDropdown:SetupMenu(function(_, menu)
@@ -811,12 +814,17 @@ local function RegisterSettings()
         AddProfessionCheckbox(slot)
     end
 
-    local dockedSliderWidth = 240
-    local function AddPanelSlider(setting, options)
+    local dockedSliderWidth = 220
+    local sliderLabelX = optionX + indent
+    local sliderLabelWidth = 46
+    local function AddPanelSlider(setting, options, leftText)
         local slider = CreateFrame("Frame", nil, page, "MinimalSliderWithSteppersTemplate")
-        slider:SetPoint("TOPLEFT", 24, y)
+        slider:SetPoint("TOPLEFT", sliderLabelX + sliderLabelWidth, y)
         slider:SetSize(dockedSliderWidth, 20)
         slider:Init(ProfessionSideTabsDB[setting], options.minValue, options.maxValue, options.steps, options.formatters)
+        local leftLabel = page:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+        leftLabel:SetPoint("LEFT", slider, "LEFT", -sliderLabelWidth, 0)
+        leftLabel:SetText(leftText)
         slider:RegisterCallback("OnValueChanged", function(_, value)
             ProfessionSideTabsDB[setting] = math.floor(value + 0.5)
             for _, panel in ipairs(panels) do
@@ -828,28 +836,22 @@ local function RegisterSettings()
 
     y = y - 8
     AddSectionHeading("Panel Position")
-    AddText("Vertical Position", "GameFontHighlight")
+    AddText("Vertical Position", "GameFontHighlight", optionX)
     y = y + 4
     local positionOptions = Settings.CreateSliderOptions(0, MAX_PANEL_POSITION, 1)
-    positionOptions:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Left, function()
-        return "Top"
-    end)
     positionOptions:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Right, function()
         return "Bottom"
     end)
-    local positionSlider = AddPanelSlider("panelPosition", positionOptions)
+    local positionSlider = AddPanelSlider("panelPosition", positionOptions, "Top")
 
     y = y - 28
-    AddText("Panel Size", "GameFontHighlight")
+    AddText("Panel Size", "GameFontHighlight", optionX)
     y = y + 4
     local sizeOptions = Settings.CreateSliderOptions(MIN_PANEL_SIZE, MAX_PANEL_SIZE, 1)
-    sizeOptions:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Left, function()
-        return "Small"
-    end)
     sizeOptions:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Right, function()
         return "Large"
     end)
-    local sizeSlider = AddPanelSlider("panelSize", sizeOptions)
+    local sizeSlider = AddPanelSlider("panelSize", sizeOptions, "Small")
 
     function canvas:OnDefault()
         for _, profession in pairs(primaryProfessions) do
@@ -902,8 +904,8 @@ local function RegisterSettings()
         page:ClearAllPoints()
         page:SetPoint("TOPLEFT", standalone, "TOPLEFT", 24, -20)
         page:SetPoint("BOTTOMRIGHT", standalone, "BOTTOMRIGHT", -24, 16)
-        positionSlider:SetWidth(270)
-        sizeSlider:SetWidth(270)
+        positionSlider:SetWidth(230)
+        sizeSlider:SetWidth(230)
         standalone:Show()
     end
 
