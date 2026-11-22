@@ -5,10 +5,10 @@ local container
 local buttons = {}
 local initialized = false
 
-local defaults = {
-    showArchaeology = false,
-    showFishing = true,
-    showCooking = true,
+local secondaryProfessions = {
+    [3] = { key = "showArchaeology", name = "Archaeology", default = false },
+    [4] = { key = "showFishing", name = "Fishing", default = true },
+    [5] = { key = "showCooking", name = "Cooking", default = true },
 }
 
 local function EnsureDB()
@@ -16,9 +16,9 @@ local function EnsureDB()
         ProfessionSideTabsDB = {}
     end
 
-    for key, value in pairs(defaults) do
-        if ProfessionSideTabsDB[key] == nil then
-            ProfessionSideTabsDB[key] = value
+    for _, profession in pairs(secondaryProfessions) do
+        if ProfessionSideTabsDB[profession.key] == nil then
+            ProfessionSideTabsDB[profession.key] = profession.default
         end
     end
 end
@@ -31,27 +31,8 @@ local ATT_VERTICAL_OFFSET = 80
 local function IsSecondaryShown(slot)
     EnsureDB()
 
-    if slot == 3 then
-        return ProfessionSideTabsDB.showArchaeology ~= false
-    elseif slot == 4 then
-        return ProfessionSideTabsDB.showFishing ~= false
-    elseif slot == 5 then
-        return ProfessionSideTabsDB.showCooking ~= false
-    end
-
-    return true
-end
-
-local function SetSecondaryShown(slot, value)
-    EnsureDB()
-
-    if slot == 3 then
-        ProfessionSideTabsDB.showArchaeology = value and true or false
-    elseif slot == 4 then
-        ProfessionSideTabsDB.showFishing = value and true or false
-    elseif slot == 5 then
-        ProfessionSideTabsDB.showCooking = value and true or false
-    end
+    local profession = secondaryProfessions[slot]
+    return not profession or ProfessionSideTabsDB[profession.key] ~= false
 end
 
 local function OpenProfessionBySlot(slotNumber)
@@ -407,6 +388,28 @@ local function UpdateButtons()
     end
 end
 
+local function RegisterSettings()
+    local category = Settings.RegisterVerticalLayoutCategory("Profession Side Tabs")
+
+    for slot = 3, 5 do
+        local profession = secondaryProfessions[slot]
+        local setting = Settings.RegisterAddOnSetting(
+            category,
+            addonName .. "_" .. profession.key,
+            profession.key,
+            ProfessionSideTabsDB,
+            Settings.VarType.Boolean,
+            "Show " .. profession.name,
+            profession.default
+        )
+        profession.setting = setting
+        setting:SetValueChangedCallback(UpdateButtons)
+        Settings.CreateCheckbox(category, setting, "Show the " .. profession.name .. " side tab when learned.")
+    end
+
+    Settings.RegisterAddOnCategory(category)
+end
+
 local function OnProfessionWindowShown()
     UpdateButtons()
 end
@@ -434,6 +437,7 @@ end
 addon:SetScript("OnEvent", function(self, event)
     if event == "PLAYER_LOGIN" then
         EnsureDB()
+        RegisterSettings()
         TryHookProfessionFrame()
         return
     end
@@ -478,47 +482,39 @@ SlashCmdList["PROFESSIONSIDETABS"] = function(msg)
 
     local cmd, arg = msg:match("^(%S+)%s*(%S*)$")
 
-    local function Apply(slot, name)
+    local function Apply(profession)
+        local name = profession.name
         if arg == "hide" then
-            SetSecondaryShown(slot, false)
+            profession.setting:SetValue(false)
             print("|cff00ff98PST|r: " .. name .. " hidden")
         elseif arg == "show" then
-            SetSecondaryShown(slot, true)
+            profession.setting:SetValue(true)
             print("|cff00ff98PST|r: " .. name .. " shown")
         else
             print("|cff00ff98PST|r usage: /pst " .. name:lower() .. " show/hide")
-            return
         end
-
-        UpdateButtons()
     end
 
     if cmd == "archy" or cmd == "archaeology" then
-        Apply(3, "Archaeology")
+        Apply(secondaryProfessions[3])
         return
     elseif cmd == "fishing" then
-        Apply(4, "Fishing")
+        Apply(secondaryProfessions[4])
         return
     elseif cmd == "cooking" then
-        Apply(5, "Cooking")
+        Apply(secondaryProfessions[5])
         return
     elseif cmd == "secondary" then
-        if arg == "hide" then
-            SetSecondaryShown(3, false)
-            SetSecondaryShown(4, false)
-            SetSecondaryShown(5, false)
-            print("|cff00ff98PST|r: All secondary professions hidden")
-        elseif arg == "show" then
-            SetSecondaryShown(3, true)
-            SetSecondaryShown(4, true)
-            SetSecondaryShown(5, true)
-            print("|cff00ff98PST|r: All secondary professions shown")
-        else
+        if arg ~= "show" and arg ~= "hide" then
             print("|cff00ff98PST|r usage: /pst secondary show/hide")
             return
         end
 
-        UpdateButtons()
+        local shown = arg == "show"
+        for slot = 3, 5 do
+            secondaryProfessions[slot].setting:SetValue(shown)
+        end
+        print("|cff00ff98PST|r: All secondary professions " .. (shown and "shown" or "hidden"))
         return
     end
 
