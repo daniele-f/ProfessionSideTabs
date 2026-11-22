@@ -16,7 +16,6 @@ local DIVIDER_TOP_GAP = 4
 local PANEL_HEIGHT_PADDING = 10
 local TOP_INSET = 74
 local BOTTOM_INSET = 32
-local COMPATIBILITY_Y_OFFSET = 80
 
 local DEFAULT_PANEL_POSITION = 0
 local MAX_PANEL_POSITION = 100
@@ -299,11 +298,7 @@ local function UpdateContainerPosition()
         return false
     end
 
-    local compatibilityAddon = "AllTheThings"
-    local needsClearance = C_AddOns.DoesAddOnExist(compatibilityAddon)
-        and C_AddOns.GetAddOnEnableState(compatibilityAddon, UnitGUID("player")) > Enum.AddOnEnableState.None
-    local topInset = TOP_INSET + (needsClearance and COMPATIBILITY_Y_OFFSET or 0)
-    local availableHeight = ProfessionsFrame:GetHeight() - topInset - BOTTOM_INSET
+    local availableHeight = ProfessionsFrame:GetHeight() - TOP_INSET - BOTTOM_INSET
     if availableHeight <= 0 then
         return false
     end
@@ -314,7 +309,7 @@ local function UpdateContainerPosition()
     local fraction = ProfessionSideTabsDB.panelPosition / MAX_PANEL_POSITION
     container:SetScale(scale)
     positionAnchor:ClearAllPoints()
-    positionAnchor:SetPoint("TOPLEFT", ProfessionsFrame, "TOPRIGHT", -1, -topInset - travel * fraction)
+    positionAnchor:SetPoint("TOPLEFT", ProfessionsFrame, "TOPRIGHT", -1, -TOP_INSET - travel * fraction)
     return true
 end
 
