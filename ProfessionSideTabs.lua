@@ -18,6 +18,11 @@ local PANEL_HEIGHT_PADDING = 10
 local TOP_INSET = 74
 local BOTTOM_INSET = 32
 
+local tabStyles = {
+    Panel = { width = BUTTON_SIZE, height = BUTTON_SIZE, gap = BUTTON_GAP, left = 9, groupGap = GROUP_SPACER },
+    Forever = { width = 56, height = 56, gap = 3, left = 1, groupGap = 8 },
+}
+
 local DEFAULT_PANEL_POSITION = 0
 local MAX_PANEL_POSITION = 100
 local LEGACY_FRAME_HEIGHT = 658
@@ -37,6 +42,10 @@ local function EnsureDB()
 
     if type(ProfessionSideTabsDB.hiddenPrimaryProfessions) ~= "table" then
         ProfessionSideTabsDB.hiddenPrimaryProfessions = {}
+    end
+
+    if not tabStyles[ProfessionSideTabsDB.tabStyle] then
+        ProfessionSideTabsDB.tabStyle = "Panel"
     end
 
     local position = ProfessionSideTabsDB.panelPosition
@@ -208,8 +217,58 @@ local function UpdateButtonState(button, isSelected)
     end
 end
 
+local function PositionButtonIcon(button, pressed)
+    local inset = button.tabStyle == tabStyles.Forever and 7 or 5
+    local shift = pressed and 1 or 0
+    button.icon:ClearAllPoints()
+    button.icon:SetPoint("TOPLEFT", inset + shift, -inset - shift)
+    button.icon:SetPoint("BOTTOMRIGHT", -inset + shift, inset - shift)
+end
+
+local function ApplyButtonStyle(button, style)
+    if button.tabStyle == style then
+        return
+    end
+
+    button.tabStyle = style
+    button:SetSize(style.width, style.height)
+    local isForever = style == tabStyles.Forever
+    button.border:SetShown(not isForever)
+    button.leftFlair:SetShown(not isForever)
+    button.selectedGlow:ClearAllPoints()
+    if isForever then
+        if not button.foreverIconMask then
+            local mask = button:CreateMaskTexture()
+            mask:SetTexture("Interface\\AddOns\\" .. addonName .. "\\assets\\ForeverIconMask.tga",
+                "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+            mask:SetAllPoints(button.icon)
+            button.foreverIconMask = mask
+        end
+        button.icon:AddMaskTexture(button.foreverIconMask)
+        button.bg:SetAtlas("common-sidetab")
+        button.hoverGlow:SetAtlas("common-sidetab-hover")
+        button.selectedGlow:SetAtlas("common-sidetab-selected")
+        button.selectedGlow:SetAllPoints()
+        button.selectedGlow:SetBlendMode("BLEND")
+        button.selectedGlow:SetAlpha(1)
+    else
+        button.icon:RemoveMaskTexture(button.foreverIconMask)
+        button.bg:SetColorTexture(0.10, 0.09, 0.08, 0.95)
+        button.hoverGlow:SetTexture("Interface\\Buttons\\ButtonHilight-Square")
+        button.hoverGlow:SetTexCoord(0, 1, 0, 1)
+        button.selectedGlow:SetTexture("Interface\\Buttons\\CheckButtonGlow")
+        button.selectedGlow:SetTexCoord(0, 1, 0, 1)
+        button.selectedGlow:SetPoint("TOPLEFT", button.icon, -20, 20)
+        button.selectedGlow:SetPoint("BOTTOMRIGHT", button.icon, 20, -20)
+        button.selectedGlow:SetBlendMode("ADD")
+        button.selectedGlow:SetAlpha(0.85)
+    end
+    PositionButtonIcon(button, false)
+end
+
 local function CreateTabButton(parent, index)
     local button = CreateFrame("Button", addonName .. "Tab" .. index, parent)
+    button.tabStyle = tabStyles.Panel
     button:SetSize(BUTTON_SIZE, BUTTON_SIZE)
 
     local bg = button:CreateTexture(nil, "BACKGROUND")
@@ -278,17 +337,13 @@ local function CreateTabButton(parent, index)
     end)
 
     button:SetScript("OnMouseDown", function(self)
-        self.pushedShade:Show()
-        self.icon:ClearAllPoints()
-        self.icon:SetPoint("TOPLEFT", 6, -6)
-        self.icon:SetPoint("BOTTOMRIGHT", -4, 4)
+        self.pushedShade:SetShown(self.tabStyle == tabStyles.Panel)
+        PositionButtonIcon(self, true)
     end)
 
     button:SetScript("OnMouseUp", function(self)
         self.pushedShade:Hide()
-        self.icon:ClearAllPoints()
-        self.icon:SetPoint("TOPLEFT", 5, -5)
-        self.icon:SetPoint("BOTTOMRIGHT", -5, 5)
+        PositionButtonIcon(self, false)
     end)
 
     return button
@@ -361,28 +416,35 @@ local function EnsureUI()
     end
 end
 
-local function LayoutButtonGroup(firstSlot, lastSlot, y)
+local function LayoutButtonGroup(firstSlot, lastSlot, y, style)
     for slot = firstSlot, lastSlot do
         local button = buttons[slot]
         if button:IsShown() then
             button:ClearAllPoints()
-            button:SetPoint("TOPLEFT", container, "TOPLEFT", 9, -7 - y)
-            y = y + BUTTON_SIZE + BUTTON_GAP
+            button:SetPoint("TOPLEFT", container, "TOPLEFT", style.left, -7 - y)
+            y = y + style.height + style.gap
         end
     end
     return y
 end
 
-local function LayoutButtons()
-    local primaryEnd = LayoutButtonGroup(1, 2, 0)
+local function LayoutButtons(style)
+    local isPanel = style == tabStyles.Panel
+    container:SetWidth(style.width + (isPanel and 20 or 2))
+    container.bg:SetShown(isPanel)
+    container.top:SetShown(isPanel)
+    container.right:SetShown(isPanel)
+    container.bottom:SetShown(isPanel)
+
+    local primaryEnd = LayoutButtonGroup(1, 2, 0, style)
     local hasPrimary = primaryEnd > 0
     local dividerTop = primaryEnd + DIVIDER_TOP_GAP
-    local secondaryStart = primaryEnd + (hasPrimary and GROUP_SPACER or 0)
-    local secondaryEnd = LayoutButtonGroup(3, 5, secondaryStart)
+    local secondaryStart = primaryEnd + (hasPrimary and style.groupGap or 0)
+    local secondaryEnd = LayoutButtonGroup(3, 5, secondaryStart, style)
     local hasSecondary = secondaryEnd > secondaryStart
 
     local divider = container.divider
-    if hasPrimary and hasSecondary then
+    if isPanel and hasPrimary and hasSecondary then
         divider:ClearAllPoints()
         divider:SetPoint("TOPLEFT", container, "TOPLEFT", 8, -dividerTop)
         divider:SetPoint("TOPRIGHT", container, "TOPRIGHT", -16, -dividerTop)
@@ -392,7 +454,7 @@ local function LayoutButtons()
     end
 
     local contentHeight = hasSecondary and secondaryEnd or primaryEnd
-    container:SetHeight(math.max(contentHeight + PANEL_HEIGHT_PADDING, BUTTON_SIZE))
+    container:SetHeight(math.max(contentHeight + PANEL_HEIGHT_PADDING, style.height))
     return UpdateContainerPosition()
 end
 
@@ -406,6 +468,7 @@ local function UpdateButtons()
     end
 
     local currentSkillLine = GetCurrentOpenSkillLine()
+    local style = tabStyles[ProfessionSideTabsDB.tabStyle]
     local anyButtonShown = false
 
     for slot = 1, 5 do
@@ -421,6 +484,7 @@ local function UpdateButtons()
         end
 
         if data then
+            ApplyButtonStyle(button, style)
             button.slotNumber = slot
             button.professionData = data
             button.icon:SetTexture(data.icon or 134400)
@@ -436,7 +500,7 @@ local function UpdateButtons()
         end
     end
 
-    local fits = LayoutButtons()
+    local fits = LayoutButtons(style)
 
     if ProfessionsFrame:IsShown() and anyButtonShown and fits then
         container:Show()
@@ -448,7 +512,7 @@ end
 local function CreateStandaloneSettingsWindow(title)
     local window = CreateFrame("Frame", nil, UIParent, "ButtonFrameTemplate")
     window:Hide()
-    window:SetSize(420, 402)
+    window:SetSize(420, 462)
     window:SetPoint("CENTER", UIParent, "CENTER")
     window:SetFrameStrata("DIALOG")
     window:EnableMouse(true)
@@ -563,6 +627,24 @@ local function RegisterSettings()
         UpdateContainerPosition()
     end, page)
 
+    y = y - 28
+    AddSectionHeading("Tab Style")
+    local styleDropdown = CreateFrame("DropdownButton", nil, page, "WowStyle1DropdownTemplate")
+    styleDropdown:SetPoint("TOPLEFT", 24, y)
+    styleDropdown:SetWidth(150)
+    styleDropdown:SetText(ProfessionSideTabsDB.tabStyle)
+    styleDropdown:SetupMenu(function(_, menu)
+        for _, styleName in ipairs({ "Panel", "Forever" }) do
+            menu:CreateRadio(styleName, function()
+                return ProfessionSideTabsDB.tabStyle == styleName
+            end, function()
+                ProfessionSideTabsDB.tabStyle = styleName
+                styleDropdown:SetText(styleName)
+                UpdateButtons()
+            end)
+        end
+    end)
+
     function canvas:OnDefault()
         for _, profession in pairs(primaryProfessions) do
             ProfessionSideTabsDB.hiddenPrimaryProfessions[profession.skillLine] = nil
@@ -571,7 +653,9 @@ local function RegisterSettings()
             ProfessionSideTabsDB[profession.key] = profession.default
         end
         ProfessionSideTabsDB.panelPosition = DEFAULT_PANEL_POSITION
+        ProfessionSideTabsDB.tabStyle = "Panel"
         slider:SetValue(DEFAULT_PANEL_POSITION)
+        styleDropdown:SetText("Panel")
         UpdateButtons()
     end
 
