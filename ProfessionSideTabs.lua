@@ -7,6 +7,7 @@ local windowCheckboxes = {}
 local pendingArchaeologyOpen
 local primaryProfessions = {}
 local settingsCheckboxes = {}
+local runeforgingCheckbox
 
 local BUTTON_SIZE = 48
 local BUTTON_GAP = 6
@@ -16,6 +17,9 @@ local DIVIDER_TOP_GAP = 4
 local PANEL_HEIGHT_PADDING = 10
 local TOP_INSET = 74
 local BOTTOM_INSET = 32
+local RUNEFORGING_SLOT = 6
+local RUNEFORGING_SPELL_ID = 53428
+local RUNEFORGING_SKILL_LINE = 960
 
 local craftingPanel = { frameName = "ProfessionsFrame", suffix = "", topInset = TOP_INSET, bottomInset = BOTTOM_INSET }
 local bookPanel = {
@@ -64,6 +68,10 @@ local function EnsureDB()
         if panel.option and ProfessionSideTabsDB[panel.option] == nil then
             ProfessionSideTabsDB[panel.option] = true
         end
+    end
+
+    if ProfessionSideTabsDB.showRuneforging == nil then
+        ProfessionSideTabsDB.showRuneforging = true
     end
 
     local position = ProfessionSideTabsDB.panelPosition
@@ -160,22 +168,7 @@ local function OpenArchaeology()
     ShowArchaeology()
 end
 
-local function OpenProfessionBySlot(slotNumber)
-    local professionIndex = select(slotNumber, GetProfessions())
-    if not professionIndex then
-        return
-    end
-
-    local skillLine = select(7, GetProfessionInfo(professionIndex))
-    if not skillLine then
-        return
-    end
-
-    if slotNumber == 3 then
-        OpenArchaeology()
-        return
-    end
-
+local function OpenTradeSkill(skillLine)
     local archaeology = CloseArchaeology()
     local overview = ProfessionsBookFrame
     local wasOverviewOpen = overview and overview:IsShown()
@@ -190,6 +183,29 @@ local function OpenProfessionBySlot(slotNumber)
         if wasOverviewOpen then
             overview:Show()
         end
+    end
+end
+
+local function OpenProfessionBySlot(slotNumber)
+    if slotNumber == RUNEFORGING_SLOT then
+        OpenTradeSkill(RUNEFORGING_SKILL_LINE)
+        return
+    end
+
+    local professionIndex = select(slotNumber, GetProfessions())
+    if not professionIndex then
+        return
+    end
+
+    local skillLine = select(7, GetProfessionInfo(professionIndex))
+    if not skillLine then
+        return
+    end
+
+    if slotNumber == 3 then
+        OpenArchaeology()
+    else
+        OpenTradeSkill(skillLine)
     end
 end
 
@@ -254,7 +270,25 @@ local function SetProfessionShown(slot, shown)
     end
 end
 
+local function IsDeathKnight()
+    return select(2, UnitClass("player")) == "DEATHKNIGHT"
+end
+
 local function RefreshSettingsCheckboxes()
+    if runeforgingCheckbox then
+        local isDeathKnight = IsDeathKnight()
+        local label = "Show Runeforging"
+        if not isDeathKnight then
+            label = label .. " (Only available to Death Knights)"
+        elseif not C_SpellBook.IsSpellKnown(RUNEFORGING_SPELL_ID) then
+            label = label .. " (Not learned)"
+        end
+        runeforgingCheckbox.label:SetText(label)
+        runeforgingCheckbox.label:SetAlpha(isDeathKnight and 1 or 0.5)
+        runeforgingCheckbox:SetEnabled(isDeathKnight)
+        runeforgingCheckbox:SetChecked(isDeathKnight and ProfessionSideTabsDB.showRuneforging)
+    end
+
     for option, checkbox in pairs(windowCheckboxes) do
         checkbox:SetChecked(ProfessionSideTabsDB[option])
     end
@@ -498,6 +532,15 @@ local function UpdateContainerPosition(panel)
     return true
 end
 
+local function CreateDivider(container)
+    local divider = container:CreateTexture(nil, "ARTWORK")
+    divider:SetHeight(DIVIDER_HEIGHT)
+    divider:SetTexture("Interface\\Common\\UI-TooltipDivider-Transparent")
+    divider:SetAlpha(0.9)
+    divider:Hide()
+    return divider
+end
+
 local function EnsurePanel(panel, refresh)
     local frame = _G[panel.frameName]
     if panel.container or not frame then
@@ -538,15 +581,12 @@ local function EnsurePanel(panel, refresh)
     container.bottom:SetHeight(2)
     container.bottom:SetColorTexture(0.6, 0.6, 0.6, 0.8)
 
-    container.divider = container:CreateTexture(nil, "ARTWORK")
-    container.divider:SetHeight(DIVIDER_HEIGHT)
-    container.divider:SetTexture("Interface\\Common\\UI-TooltipDivider-Transparent")
-    container.divider:SetAlpha(0.9)
-    container.divider:Hide()
+    container.divider = CreateDivider(container)
+    container.runeforgingDivider = CreateDivider(container)
 
     container:Hide()
 
-    for i = 1, 5 do
+    for i = 1, RUNEFORGING_SLOT do
         panel.buttons[i] = CreateTabButton(container, prefix .. "Tab" .. i)
     end
 
@@ -586,6 +626,16 @@ local function LayoutButtonGroup(panel, firstSlot, lastSlot, y, style)
     return y
 end
 
+local function PositionDivider(divider, container, groupEnd, shown)
+    if shown then
+        local top = groupEnd + DIVIDER_TOP_GAP
+        divider:ClearAllPoints()
+        divider:SetPoint("TOPLEFT", container, "TOPLEFT", 8, -top)
+        divider:SetPoint("TOPRIGHT", container, "TOPRIGHT", -16, -top)
+    end
+    divider:SetShown(shown)
+end
+
 local function LayoutButtons(panel, style)
     local container = panel.container
     local isPanel = style == tabStyles.Panel
@@ -601,22 +651,21 @@ local function LayoutButtons(panel, style)
     end
     local primaryEnd = LayoutButtonGroup(panel, 1, 2, primaryStart, style)
     local hasPrimary = primaryEnd > 0
-    local dividerTop = primaryEnd + DIVIDER_TOP_GAP
     local secondaryStart = primaryEnd + (hasPrimary and style.groupGap or 0)
     local secondaryEnd = LayoutButtonGroup(panel, 3, 5, secondaryStart, style)
     local hasSecondary = secondaryEnd > secondaryStart
 
-    local divider = container.divider
-    if isPanel and hasPrimary and hasSecondary then
-        divider:ClearAllPoints()
-        divider:SetPoint("TOPLEFT", container, "TOPLEFT", 8, -dividerTop)
-        divider:SetPoint("TOPRIGHT", container, "TOPRIGHT", -16, -dividerTop)
-        divider:Show()
-    else
-        divider:Hide()
-    end
-
     local contentHeight = hasSecondary and secondaryEnd or primaryEnd
+    local runeforging = panel.buttons[RUNEFORGING_SLOT]
+    local hasRuneforging = runeforging:IsShown()
+    PositionDivider(container.divider, container, primaryEnd, isPanel and hasPrimary and hasSecondary)
+    PositionDivider(container.runeforgingDivider, container, contentHeight,
+        isPanel and hasRuneforging and contentHeight > 0)
+
+    if hasRuneforging then
+        local runeforgingStart = contentHeight + (contentHeight > 0 and style.groupGap or 0)
+        contentHeight = PlaceTabButton(panel, runeforging, runeforgingStart, style)
+    end
     container:SetHeight(math.max(contentHeight + PANEL_HEIGHT_PADDING, style.height))
     return UpdateContainerPosition(panel)
 end
@@ -639,7 +688,7 @@ local function UpdatePanel(panel, professions, currentSkillLine, style)
         anyButtonShown = showOverview
     end
 
-    for slot = 1, 5 do
+    for slot = 1, RUNEFORGING_SLOT do
         local button = panel.buttons[slot]
         local data = professions[slot]
         if data then
@@ -683,6 +732,14 @@ local function UpdateButtons()
         end
     end
 
+    if ProfessionSideTabsDB.showRuneforging and IsDeathKnight() and C_SpellBook.IsSpellKnown(RUNEFORGING_SPELL_ID) then
+        professions[RUNEFORGING_SLOT] = {
+            name = "Runeforging",
+            icon = C_Spell.GetSpellTexture(RUNEFORGING_SPELL_ID),
+            skillLine = RUNEFORGING_SKILL_LINE,
+        }
+    end
+
     local currentSkillLine = GetCurrentOpenSkillLine()
     local style = tabStyles[ProfessionSideTabsDB.tabStyle]
     for _, panel in ipairs(panels) do
@@ -696,7 +753,7 @@ end
 local function CreateStandaloneSettingsWindow(title)
     local window = CreateFrame("Frame", nil, UIParent, "ButtonFrameTemplate")
     window:Hide()
-    window:SetSize(460, 610)
+    window:SetSize(460, 688)
     window:SetPoint("CENTER", UIParent, "CENTER")
     window:SetFrameStrata("DIALOG")
     window:EnableMouse(true)
@@ -710,13 +767,15 @@ local function CreateStandaloneSettingsWindow(title)
     local titleBar = window.TitleContainer
     titleBar:SetHitRectInsets(0, window.CloseButton:GetWidth(), 0, 0)
     titleBar:EnableMouse(true)
-    titleBar:RegisterForDrag("LeftButton")
-    titleBar:SetScript("OnDragStart", function()
-        window:StartMoving()
-    end)
-    titleBar:SetScript("OnDragStop", function()
-        window:StopMovingOrSizing()
-    end)
+    for _, dragSurface in ipairs({ window, titleBar }) do
+        dragSurface:RegisterForDrag("LeftButton")
+        dragSurface:SetScript("OnDragStart", function()
+            window:StartMoving()
+        end)
+        dragSurface:SetScript("OnDragStop", function()
+            window:StopMovingOrSizing()
+        end)
+    end
     window:SetScript("OnHide", window.StopMovingOrSizing)
     window.CloseButton:SetScript("OnClick", function()
         window:Hide()
@@ -817,6 +876,13 @@ local function RegisterSettings()
         AddProfessionCheckbox(slot)
     end
 
+    y = y - 8
+    AddSectionHeading("Death Knights")
+    runeforgingCheckbox = AddCheckbox("", function(self)
+        ProfessionSideTabsDB.showRuneforging = not not self:GetChecked()
+        UpdateButtons()
+    end)
+
     local dockedSliderWidth = 220
     local sliderLabelX = optionX + indent
     local sliderLabelWidth = 46
@@ -863,6 +929,7 @@ local function RegisterSettings()
         for _, profession in pairs(secondaryProfessions) do
             ProfessionSideTabsDB[profession.key] = profession.default
         end
+        ProfessionSideTabsDB.showRuneforging = true
         ProfessionSideTabsDB.panelPosition = DEFAULT_PANEL_POSITION
         ProfessionSideTabsDB.panelSize = DEFAULT_PANEL_SIZE
         for _, panel in ipairs(panels) do
