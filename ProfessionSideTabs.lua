@@ -6,7 +6,8 @@ local openStandaloneSettings
 local windowCheckboxes = {}
 local pendingArchaeologyOpen
 local primaryProfessions = {}
-local settingsCheckboxes = {}
+local primaryCheckboxes = {}
+local secondaryCheckboxes = {}
 local runeforgingCheckbox
 
 local BUTTON_SIZE = 48
@@ -40,11 +41,28 @@ local tabStyles = {
 local DEFAULT_PANEL_POSITION = 0
 local MAX_PANEL_POSITION = 100
 local MIN_PANEL_SIZE = 75
-local DEFAULT_PANEL_SIZE = 100
 local MAX_PANEL_SIZE = 110
+local DEFAULT_PANEL_SIZE = math.floor((MIN_PANEL_SIZE + MAX_PANEL_SIZE) / 2 + 0.5)
 local LEGACY_FRAME_HEIGHT = 658
 local LEGACY_SEPARATOR_DEPTH = 2 * (BUTTON_SIZE + BUTTON_GAP) + DIVIDER_TOP_GAP + DIVIDER_HEIGHT / 2
 local LEGACY_PANEL_HEIGHT = 5 * (BUTTON_SIZE + BUTTON_GAP) + GROUP_SPACER + PANEL_HEIGHT_PADDING
+
+local primaryProfessionOptions = {
+    { skillLine = 171, name = "Alchemy" },
+    { skillLine = 164, name = "Blacksmithing" },
+    { skillLine = 333, name = "Enchanting" },
+    { skillLine = 202, name = "Engineering" },
+    { skillLine = 182, name = "Herbalism" },
+    { skillLine = 773, name = "Inscription" },
+    { skillLine = 755, name = "Jewelcrafting" },
+    { skillLine = 165, name = "Leatherworking" },
+    { skillLine = 186, name = "Mining" },
+    { skillLine = 393, name = "Skinning" },
+    { skillLine = 197, name = "Tailoring" },
+}
+
+local primaryProfessionSlots = { 1, 2 }
+local secondaryProfessionSlots = { 5, 4, 3 }
 
 local secondaryProfessions = {
     [3] = { key = "showArchaeology", name = "Archaeology", default = true },
@@ -255,19 +273,12 @@ local function RefreshPrimaryProfessions()
     end
 end
 
-local function IsPrimaryShown(profession)
-    return profession ~= nil and not ProfessionSideTabsDB.hiddenPrimaryProfessions[profession.skillLine]
+local function IsPrimaryShown(skillLine)
+    return not ProfessionSideTabsDB.hiddenPrimaryProfessions[skillLine]
 end
 
-local function SetProfessionShown(slot, shown)
-    if slot <= 2 then
-        local profession = primaryProfessions[slot]
-        if profession then
-            ProfessionSideTabsDB.hiddenPrimaryProfessions[profession.skillLine] = not shown or nil
-        end
-    else
-        ProfessionSideTabsDB[secondaryProfessions[slot].key] = shown
-    end
+local function SetSecondaryShown(slot, shown)
+    ProfessionSideTabsDB[secondaryProfessions[slot].key] = shown
 end
 
 local function IsDeathKnight()
@@ -292,25 +303,22 @@ local function RefreshSettingsCheckboxes()
     for option, checkbox in pairs(windowCheckboxes) do
         checkbox:SetChecked(ProfessionSideTabsDB[option])
     end
-    for slot, checkbox in ipairs(settingsCheckboxes) do
-        if slot <= 2 then
-            local profession = primaryProfessions[slot]
-            if profession and profession.name then
-                checkbox.label:SetText("Show " .. profession.name)
-            else
-                checkbox.label:SetText("Primary Profession " .. slot .. " (unlearned)")
-            end
-            checkbox:SetEnabled(profession ~= nil)
-            checkbox.label:SetAlpha(profession and 1 or 0.5)
-            checkbox:SetChecked(IsPrimaryShown(profession))
-        else
-            local label = "Show " .. secondaryProfessions[slot].name
-            if not select(slot, GetProfessions()) then
-                label = label .. " (Not learned)"
-            end
-            checkbox.label:SetText(label)
-            checkbox:SetChecked(IsSecondaryShown(slot))
+    local first, second = primaryProfessions[1], primaryProfessions[2]
+    for skillLine, checkbox in pairs(primaryCheckboxes) do
+        local learned = (first and first.skillLine == skillLine) or (second and second.skillLine == skillLine)
+        checkbox.label:SetText(checkbox.professionName .. (learned and " (Learned)" or ""))
+        local color = learned and NORMAL_FONT_COLOR or HIGHLIGHT_FONT_COLOR
+        checkbox.label:SetTextColor(color:GetRGB())
+        checkbox:SetChecked(IsPrimaryShown(skillLine))
+    end
+
+    for slot, checkbox in pairs(secondaryCheckboxes) do
+        local label = "Show " .. secondaryProfessions[slot].name
+        if not select(slot, GetProfessions()) then
+            label = label .. " (Not learned)"
         end
+        checkbox.label:SetText(label)
+        checkbox:SetChecked(IsSecondaryShown(slot))
     end
 end
 
@@ -616,8 +624,8 @@ local function PlaceTabButton(panel, button, y, style)
     return y + style.height + style.gap
 end
 
-local function LayoutButtonGroup(panel, firstSlot, lastSlot, y, style)
-    for slot = firstSlot, lastSlot do
+local function LayoutButtonGroup(panel, slots, y, style)
+    for _, slot in ipairs(slots) do
         local button = panel.buttons[slot]
         if button:IsShown() then
             y = PlaceTabButton(panel, button, y, style)
@@ -649,10 +657,10 @@ local function LayoutButtons(panel, style)
     if panel.overview and panel.overview:IsShown() then
         primaryStart = PlaceTabButton(panel, panel.overview, 0, style)
     end
-    local primaryEnd = LayoutButtonGroup(panel, 1, 2, primaryStart, style)
+    local primaryEnd = LayoutButtonGroup(panel, primaryProfessionSlots, primaryStart, style)
     local hasPrimary = primaryEnd > 0
     local secondaryStart = primaryEnd + (hasPrimary and style.groupGap or 0)
-    local secondaryEnd = LayoutButtonGroup(panel, 3, 5, secondaryStart, style)
+    local secondaryEnd = LayoutButtonGroup(panel, secondaryProfessionSlots, secondaryStart, style)
     local hasSecondary = secondaryEnd > secondaryStart
 
     local contentHeight = hasSecondary and secondaryEnd or primaryEnd
@@ -722,7 +730,7 @@ local function UpdateButtons()
     local professions = {}
     for slot = 1, 2 do
         local profession = primaryProfessions[slot]
-        if IsPrimaryShown(profession) then
+        if profession and IsPrimaryShown(profession.skillLine) then
             professions[slot] = profession
         end
     end
@@ -753,7 +761,7 @@ end
 local function CreateStandaloneSettingsWindow(title)
     local window = CreateFrame("Frame", nil, UIParent, "ButtonFrameTemplate")
     window:Hide()
-    window:SetSize(460, 688)
+    window:SetSize(650, 688)
     window:SetPoint("CENTER", UIParent, "CENTER")
     window:SetFrameStrata("DIALOG")
     window:EnableMouse(true)
@@ -791,13 +799,22 @@ local function RegisterSettings()
     local canvasTitle = canvas:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
     canvasTitle:SetPoint("TOPLEFT", 24, -20)
     canvasTitle:SetText(title)
-    local page = CreateFrame("Frame", nil, canvas)
+    local scrollFrame = CreateFrame("ScrollFrame", nil, canvas, "UIPanelScrollFrameTemplate")
+    local content = CreateFrame("Frame", nil, scrollFrame)
+    content:SetSize(1, 1)
+    scrollFrame:SetScrollChild(content)
+    scrollFrame:SetScript("OnSizeChanged", function(_, width)
+        content:SetWidth(math.max(1, width))
+    end)
+    scrollFrame:SetPoint("TOPLEFT", canvas, "TOPLEFT", 0, -36)
+    scrollFrame:SetPoint("BOTTOMRIGHT", canvas, "BOTTOMRIGHT", -30, 8)
 
+    local page = CreateFrame("Frame", nil, content)
     local function DockSettingsPage()
-        page:SetParent(canvas)
+        page:SetParent(content)
         page:ClearAllPoints()
-        page:SetPoint("TOPLEFT", canvas, "TOPLEFT", 0, -36)
-        page:SetPoint("BOTTOMRIGHT", canvas, "BOTTOMRIGHT")
+        page:SetPoint("TOPLEFT", content, "TOPLEFT")
+        page:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT")
     end
     DockSettingsPage()
 
@@ -818,23 +835,24 @@ local function RegisterSettings()
         AddText(title, "GameFontNormal", headingX)
     end
 
-    local function AddCheckbox(label, onClick)
+    local columns = 3
+    local columnWidth = 180
+    local checkboxRowHeight = 30
+    local function AddCheckbox(label, onClick, x, rowY)
         local checkbox = CreateFrame("CheckButton", nil, page, "UICheckButtonTemplate")
-        checkbox:SetPoint("TOPLEFT", optionX, y)
+        checkbox:SetPoint("TOPLEFT", x or optionX, rowY or y)
         checkbox:SetSize(26, 26)
         checkbox.label = checkbox:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
         checkbox.label:SetPoint("LEFT", checkbox, "RIGHT", 4, 0)
         checkbox.label:SetText(label)
         checkbox:SetScript("OnClick", onClick)
-        y = y - 30
+        if rowY == nil then
+            y = y - checkboxRowHeight
+        else
+            checkbox.label:SetWidth(columnWidth - 36)
+            checkbox.label:SetJustifyH("LEFT")
+        end
         return checkbox
-    end
-
-    local function AddProfessionCheckbox(slot)
-        settingsCheckboxes[slot] = AddCheckbox("", function(self)
-            SetProfessionShown(slot, not not self:GetChecked())
-            UpdateButtons()
-        end)
     end
 
     AddText("Tab Style", "GameFontNormal", headingX)
@@ -866,15 +884,35 @@ local function RegisterSettings()
     end
 
     AddSectionHeading("Primary Professions")
-    for slot = 1, 2 do
-        AddProfessionCheckbox(slot)
+    for index, profession in ipairs(primaryProfessionOptions) do
+        local skillLine = profession.skillLine
+        local name
+        if C_TradeSkillUI.GetTradeSkillDisplayName then
+            name = C_TradeSkillUI.GetTradeSkillDisplayName(skillLine)
+        end
+        if not name or name == "" then
+            name = profession.name
+        end
+        local column = (index - 1) % columns
+        local row = math.floor((index - 1) / columns)
+        local checkbox = AddCheckbox(name, function(self)
+            ProfessionSideTabsDB.hiddenPrimaryProfessions[skillLine] = not self:GetChecked() or nil
+            UpdateButtons()
+        end, optionX + column * columnWidth, y - row * checkboxRowHeight)
+        checkbox.professionName = name
+        primaryCheckboxes[skillLine] = checkbox
     end
+    y = y - math.ceil(#primaryProfessionOptions / columns) * checkboxRowHeight
 
     y = y - 8
     AddSectionHeading("Secondary Professions")
-    for slot = 3, 5 do
-        AddProfessionCheckbox(slot)
+    for column, slot in ipairs(secondaryProfessionSlots) do
+        secondaryCheckboxes[slot] = AddCheckbox("", function(self)
+            SetSecondaryShown(slot, not not self:GetChecked())
+            UpdateButtons()
+        end, optionX + (column - 1) * columnWidth, y)
     end
+    y = y - checkboxRowHeight
 
     y = y - 8
     AddSectionHeading("Death Knights")
@@ -921,11 +959,10 @@ local function RegisterSettings()
         return "Large"
     end)
     local sizeSlider = AddPanelSlider("panelSize", sizeOptions, "Small")
+    content:SetHeight(-y + sizeSlider:GetHeight() + 12)
 
     function canvas:OnDefault()
-        for _, profession in pairs(primaryProfessions) do
-            ProfessionSideTabsDB.hiddenPrimaryProfessions[profession.skillLine] = nil
-        end
+        ProfessionSideTabsDB.hiddenPrimaryProfessions = {}
         for _, profession in pairs(secondaryProfessions) do
             ProfessionSideTabsDB[profession.key] = profession.default
         end
@@ -980,7 +1017,7 @@ local function RegisterSettings()
     end
 
     local popout = CreateFrame("Button", nil, canvas)
-    popout:SetPoint("TOPRIGHT", -18, -16)
+    popout:SetPoint("TOPRIGHT", -36, -16)
     popout:SetSize(24, 24)
     popout:SetNormalAtlas("RedButton-Expand")
     popout:SetPushedAtlas("RedButton-Expand-Pressed")
@@ -1094,7 +1131,7 @@ SlashCmdList["PROFESSIONSIDETABS"] = function(msg)
         end
 
         for slot = 3, 5 do
-            SetProfessionShown(slot, shown)
+            SetSecondaryShown(slot, shown)
         end
         UpdateButtons()
         print("|cff00ff98PST|r: All secondary professions " .. status)
@@ -1108,7 +1145,7 @@ SlashCmdList["PROFESSIONSIDETABS"] = function(msg)
                 return
             end
 
-            SetProfessionShown(slot, shown)
+            SetSecondaryShown(slot, shown)
             print("|cff00ff98PST|r: " .. profession.name .. " " .. status)
             UpdateButtons()
             return
