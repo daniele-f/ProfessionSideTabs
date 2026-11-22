@@ -1,11 +1,9 @@
 local addonName = ...
 local addon = CreateFrame("Frame")
 
-local container
-local positionAnchor
 local settingsCategory
 local openStandaloneSettings
-local buttons = {}
+local showBookCheckbox
 local primaryProfessions = {}
 local settingsCheckboxes = {}
 
@@ -17,6 +15,10 @@ local DIVIDER_TOP_GAP = 4
 local PANEL_HEIGHT_PADDING = 10
 local TOP_INSET = 74
 local BOTTOM_INSET = 32
+
+local craftingPanel = { frameName = "ProfessionsFrame", suffix = "", topInset = TOP_INSET, bottomInset = BOTTOM_INSET }
+local bookPanel = { frameName = "ProfessionsBookFrame", suffix = "Book", topInset = 27, bottomInset = 6 }
+local panels = { craftingPanel, bookPanel }
 
 local tabStyles = {
     Panel = { width = BUTTON_SIZE, height = BUTTON_SIZE, gap = BUTTON_GAP, left = 9, groupGap = GROUP_SPACER },
@@ -46,6 +48,9 @@ local function EnsureDB()
 
     if not tabStyles[ProfessionSideTabsDB.tabStyle] then
         ProfessionSideTabsDB.tabStyle = "Panel"
+    end
+    if ProfessionSideTabsDB.showProfessionsBook == nil then
+        ProfessionSideTabsDB.showProfessionsBook = false
     end
 
     local position = ProfessionSideTabsDB.panelPosition
@@ -90,7 +95,25 @@ local function OpenProfessionBySlot(slotNumber)
         return
     end
 
-    C_TradeSkillUI.OpenTradeSkill(skillLine)
+    local overview = ProfessionsBookFrame
+    local wasOverviewOpen = overview and overview:IsShown()
+    if wasOverviewOpen then
+        overview:Hide()
+    end
+
+    if not C_TradeSkillUI.OpenTradeSkill(skillLine) and wasOverviewOpen then
+        overview:Show()
+    end
+end
+
+local function OpenProfessionsOverview()
+    if not ProfessionsBookFrame or not ProfessionsBookFrame:IsShown() then
+        ToggleProfessionsBook()
+    end
+
+    if ProfessionsBookFrame and ProfessionsBookFrame:IsShown() and ProfessionsFrame and ProfessionsFrame:IsShown() then
+        ProfessionsFrame:CheckConfirmClose()
+    end
 end
 
 local function GetProfessionDataBySlot(slotNumber)
@@ -140,6 +163,9 @@ local function SetProfessionShown(slot, shown)
 end
 
 local function RefreshSettingsCheckboxes()
+    if showBookCheckbox then
+        showBookCheckbox:SetChecked(ProfessionSideTabsDB.showProfessionsBook)
+    end
     for slot, checkbox in ipairs(settingsCheckboxes) do
         if slot <= 2 then
             local profession = primaryProfessions[slot]
@@ -280,8 +306,8 @@ local function ApplyButtonStyle(button, style)
     PositionButtonIcon(button, false)
 end
 
-local function CreateTabButton(parent, index)
-    local button = CreateFrame("Button", addonName .. "Tab" .. index, parent)
+local function CreateTabButton(parent, name, onClick)
+    local button = CreateFrame("Button", name, parent)
     button.tabStyle = tabStyles.Panel
     button:SetSize(BUTTON_SIZE, BUTTON_SIZE)
 
@@ -334,7 +360,7 @@ local function CreateTabButton(parent, index)
     pushedShade:Hide()
     button.pushedShade = pushedShade
 
-    button:SetScript("OnClick", function(self)
+    button:SetScript("OnClick", onClick or function(self)
         if self.slotNumber then
             OpenProfessionBySlot(self.slotNumber)
         end
@@ -363,12 +389,13 @@ local function CreateTabButton(parent, index)
     return button
 end
 
-local function UpdateContainerPosition()
+local function UpdateContainerPosition(panel)
+    local container = panel.container
     if not container or container:GetHeight() <= 0 then
         return false
     end
 
-    local availableHeight = ProfessionsFrame:GetHeight() - TOP_INSET - BOTTOM_INSET
+    local availableHeight = panel.frame:GetHeight() - panel.topInset - panel.bottomInset
     if availableHeight <= 0 then
         return false
     end
@@ -378,21 +405,27 @@ local function UpdateContainerPosition()
     local travel = math.max(0, availableHeight - panelHeight * scale)
     local fraction = ProfessionSideTabsDB.panelPosition / MAX_PANEL_POSITION
     container:SetScale(scale)
-    positionAnchor:ClearAllPoints()
-    positionAnchor:SetPoint("TOPLEFT", ProfessionsFrame, "TOPRIGHT", -1, -TOP_INSET - travel * fraction)
+    panel.anchor:ClearAllPoints()
+    panel.anchor:SetPoint("TOPLEFT", panel.frame, "TOPRIGHT", -1, -panel.topInset - travel * fraction)
     return true
 end
 
-local function EnsureUI()
-    if container or not ProfessionsFrame then
+local function EnsurePanel(panel, refresh)
+    local frame = _G[panel.frameName]
+    if panel.container or not frame then
         return
     end
 
     -- Keep the horizontal anchor at the window's scale if the buttons need to shrink.
-    positionAnchor = CreateFrame("Frame", nil, ProfessionsFrame)
-    positionAnchor:SetSize(1, 1)
-    container = CreateFrame("Frame", addonName .. "Container", ProfessionsFrame)
-    container:SetPoint("TOPLEFT", positionAnchor, "TOPLEFT", 0, 0)
+    local anchor = CreateFrame("Frame", nil, frame)
+    anchor:SetSize(1, 1)
+    local prefix = addonName .. panel.suffix
+    local container = CreateFrame("Frame", prefix .. "Container", frame)
+    container:SetPoint("TOPLEFT", anchor, "TOPLEFT", 0, 0)
+    panel.frame = frame
+    panel.container = container
+    panel.anchor = anchor
+    panel.buttons = {}
     container:SetWidth(BUTTON_SIZE + 20)
 
     container.bg = container:CreateTexture(nil, "BACKGROUND")
@@ -426,23 +459,42 @@ local function EnsureUI()
     container:Hide()
 
     for i = 1, 5 do
-        buttons[i] = CreateTabButton(container, i)
+        panel.buttons[i] = CreateTabButton(container, prefix .. "Tab" .. i)
     end
+
+    if type(ToggleProfessionsBook) == "function" then
+        local overview = CreateTabButton(container, prefix .. "OverviewTab", OpenProfessionsOverview)
+        overview.icon:SetTexture("Interface\\Spellbook\\Spellbook-Icon")
+        overview.professionData = { name = "Professions Overview" }
+        overview:Hide()
+        panel.overview = overview
+    end
+
+    frame:HookScript("OnShow", refresh)
+    frame:HookScript("OnSizeChanged", refresh)
+    frame:HookScript("OnHide", function()
+        container:Hide()
+    end)
 end
 
-local function LayoutButtonGroup(firstSlot, lastSlot, y, style)
+local function PlaceTabButton(panel, button, y, style)
+    button:ClearAllPoints()
+    button:SetPoint("TOPLEFT", panel.container, "TOPLEFT", style.left, -7 - y)
+    return y + style.height + style.gap
+end
+
+local function LayoutButtonGroup(panel, firstSlot, lastSlot, y, style)
     for slot = firstSlot, lastSlot do
-        local button = buttons[slot]
+        local button = panel.buttons[slot]
         if button:IsShown() then
-            button:ClearAllPoints()
-            button:SetPoint("TOPLEFT", container, "TOPLEFT", style.left, -7 - y)
-            y = y + style.height + style.gap
+            y = PlaceTabButton(panel, button, y, style)
         end
     end
     return y
 end
 
-local function LayoutButtons(style)
+local function LayoutButtons(panel, style)
+    local container = panel.container
     local isPanel = style == tabStyles.Panel
     container:SetWidth(style.width + (isPanel and 20 or 2))
     container.bg:SetShown(isPanel)
@@ -450,11 +502,15 @@ local function LayoutButtons(style)
     container.right:SetShown(isPanel)
     container.bottom:SetShown(isPanel)
 
-    local primaryEnd = LayoutButtonGroup(1, 2, 0, style)
+    local primaryStart = 0
+    if panel.overview and panel.overview:IsShown() then
+        primaryStart = PlaceTabButton(panel, panel.overview, 0, style)
+    end
+    local primaryEnd = LayoutButtonGroup(panel, 1, 2, primaryStart, style)
     local hasPrimary = primaryEnd > 0
     local dividerTop = primaryEnd + DIVIDER_TOP_GAP
     local secondaryStart = primaryEnd + (hasPrimary and style.groupGap or 0)
-    local secondaryEnd = LayoutButtonGroup(3, 5, secondaryStart, style)
+    local secondaryEnd = LayoutButtonGroup(panel, 3, 5, secondaryStart, style)
     local hasSecondary = secondaryEnd > secondaryStart
 
     local divider = container.divider
@@ -469,41 +525,37 @@ local function LayoutButtons(style)
 
     local contentHeight = hasSecondary and secondaryEnd or primaryEnd
     container:SetHeight(math.max(contentHeight + PANEL_HEIGHT_PADDING, style.height))
-    return UpdateContainerPosition()
+    return UpdateContainerPosition(panel)
 end
 
-local function UpdateButtons()
-    EnsureDB()
-    RefreshPrimaryProfessions()
-    RefreshSettingsCheckboxes()
-    EnsureUI()
-    if not container then
+local function UpdatePanel(panel, professions, currentSkillLine, style)
+    local container = panel.container
+    if not panel.frame:IsShown() or (panel == bookPanel and not ProfessionSideTabsDB.showProfessionsBook) then
+        container:Hide()
         return
     end
 
-    local currentSkillLine = GetCurrentOpenSkillLine()
-    local style = tabStyles[ProfessionSideTabsDB.tabStyle]
     local anyButtonShown = false
+    if panel.overview then
+        local showOverview = ProfessionSideTabsDB.showProfessionsBook
+        if showOverview then
+            ApplyButtonStyle(panel.overview, style)
+            UpdateButtonState(panel.overview, panel == bookPanel)
+        end
+        panel.overview:SetShown(showOverview)
+        anyButtonShown = showOverview
+    end
 
     for slot = 1, 5 do
-        local button = buttons[slot]
-        local data
-        if slot <= 2 then
-            local profession = primaryProfessions[slot]
-            if IsPrimaryShown(profession) then
-                data = profession
-            end
-        elseif IsSecondaryShown(slot) then
-            data = GetProfessionDataBySlot(slot)
-        end
-
+        local button = panel.buttons[slot]
+        local data = professions[slot]
         if data then
             ApplyButtonStyle(button, style)
             button.slotNumber = slot
             button.professionData = data
             button.icon:SetTexture(data.icon or 134400)
             button:Show()
-            UpdateButtonState(button, currentSkillLine and currentSkillLine == data.skillLine)
+            UpdateButtonState(button, panel == craftingPanel and currentSkillLine == data.skillLine)
             anyButtonShown = true
         else
             button.slotNumber = nil
@@ -514,19 +566,42 @@ local function UpdateButtons()
         end
     end
 
-    local fits = LayoutButtons(style)
+    local fits = LayoutButtons(panel, style)
+    container:SetShown(anyButtonShown and fits)
+end
 
-    if ProfessionsFrame:IsShown() and anyButtonShown and fits then
-        container:Show()
-    else
-        container:Hide()
+local function UpdateButtons()
+    EnsureDB()
+    RefreshPrimaryProfessions()
+    RefreshSettingsCheckboxes()
+
+    local professions = {}
+    for slot = 1, 2 do
+        local profession = primaryProfessions[slot]
+        if IsPrimaryShown(profession) then
+            professions[slot] = profession
+        end
+    end
+    for slot = 3, 5 do
+        if IsSecondaryShown(slot) then
+            professions[slot] = GetProfessionDataBySlot(slot)
+        end
+    end
+
+    local currentSkillLine = GetCurrentOpenSkillLine()
+    local style = tabStyles[ProfessionSideTabsDB.tabStyle]
+    for _, panel in ipairs(panels) do
+        EnsurePanel(panel, UpdateButtons)
+        if panel.container then
+            UpdatePanel(panel, professions, currentSkillLine, style)
+        end
     end
 end
 
 local function CreateStandaloneSettingsWindow(title)
     local window = CreateFrame("Frame", nil, UIParent, "ButtonFrameTemplate")
     window:Hide()
-    window:SetSize(420, 462)
+    window:SetSize(420, 532)
     window:SetPoint("CENTER", UIParent, "CENTER")
     window:SetFrameStrata("DIALOG")
     window:EnableMouse(true)
@@ -586,22 +661,32 @@ local function RegisterSettings()
         AddText(title, "GameFontNormal")
     end
 
-    local function AddProfessionCheckbox(slot)
+    local function AddCheckbox(label, onClick)
         local checkbox = CreateFrame("CheckButton", nil, page, "UICheckButtonTemplate")
         checkbox:SetPoint("TOPLEFT", 24, y)
         checkbox:SetSize(26, 26)
         checkbox.label = checkbox:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
         checkbox.label:SetPoint("LEFT", checkbox, "RIGHT", 4, 0)
-        settingsCheckboxes[slot] = checkbox
-        if slot >= 3 then
-            checkbox.label:SetText("Show " .. secondaryProfessions[slot].name)
-        end
-        checkbox:SetScript("OnClick", function(self)
+        checkbox.label:SetText(label)
+        checkbox:SetScript("OnClick", onClick)
+        y = y - 30
+        return checkbox
+    end
+
+    local function AddProfessionCheckbox(slot)
+        local profession = secondaryProfessions[slot]
+        local label = profession and ("Show " .. profession.name) or ""
+        settingsCheckboxes[slot] = AddCheckbox(label, function(self)
             SetProfessionShown(slot, not not self:GetChecked())
             UpdateButtons()
         end)
-        y = y - 30
     end
+
+    AddSectionHeading("Professions Overview")
+    showBookCheckbox = AddCheckbox("Show tabs on the Professions overview", function(self)
+        ProfessionSideTabsDB.showProfessionsBook = not not self:GetChecked()
+        UpdateButtons()
+    end)
 
     AddSectionHeading("Primary Professions")
     for slot = 1, 2 do
@@ -638,7 +723,9 @@ local function RegisterSettings()
     )
     slider:RegisterCallback("OnValueChanged", function(_, value)
         ProfessionSideTabsDB.panelPosition = math.floor(value + 0.5)
-        UpdateContainerPosition()
+        for _, panel in ipairs(panels) do
+            UpdateContainerPosition(panel)
+        end
     end, page)
 
     y = y - 28
@@ -667,6 +754,7 @@ local function RegisterSettings()
             ProfessionSideTabsDB[profession.key] = profession.default
         end
         ProfessionSideTabsDB.panelPosition = DEFAULT_PANEL_POSITION
+        ProfessionSideTabsDB.showProfessionsBook = false
         ProfessionSideTabsDB.tabStyle = "Panel"
         slider:SetValue(DEFAULT_PANEL_POSITION)
         styleDropdown:SetText("Panel")
@@ -728,48 +816,31 @@ local function RegisterSettings()
     settingsCategory = category
 end
 
-local function OnProfessionWindowHidden()
-    if container then
-        container:Hide()
-    end
-end
-
-local function TryHookProfessionFrame()
-    if not ProfessionsFrame then
-        return
-    end
-
-    EnsureUI()
-
-    if not ProfessionsFrame.__ProfessionSideTabsHooked then
-        ProfessionsFrame:HookScript("OnShow", UpdateButtons)
-        ProfessionsFrame:HookScript("OnHide", OnProfessionWindowHidden)
-        ProfessionsFrame:HookScript("OnSizeChanged", UpdateButtons)
-        ProfessionsFrame.__ProfessionSideTabsHooked = true
-    end
-end
-
-addon:SetScript("OnEvent", function(self, event)
+addon:SetScript("OnEvent", function(self, event, loadedAddon)
     if event == "PLAYER_LOGIN" then
         EnsureDB()
         RefreshPrimaryProfessions()
         RegisterSettings()
-        TryHookProfessionFrame()
-        return
-    end
-
-    if event == "TRADE_SKILL_SHOW" then
-        TryHookProfessionFrame()
         UpdateButtons()
         return
     end
 
-    if event == "TRADE_SKILL_CLOSE" then
-        OnProfessionWindowHidden()
+    if event == "ADDON_LOADED" then
+        if loadedAddon == "Blizzard_Professions" or loadedAddon == "Blizzard_ProfessionsBook" then
+            UpdateButtons()
+        end
         return
     end
 
-    if event == "SKILL_LINES_CHANGED"
+    if event == "TRADE_SKILL_CLOSE" then
+        if craftingPanel.container then
+            craftingPanel.container:Hide()
+        end
+        return
+    end
+
+    if event == "TRADE_SKILL_SHOW"
+        or event == "SKILL_LINES_CHANGED"
         or event == "SPELLS_CHANGED"
         or event == "CHAT_MSG_SKILL"
         or event == "TRADE_SKILL_LIST_UPDATE"
@@ -781,6 +852,7 @@ addon:SetScript("OnEvent", function(self, event)
 end)
 
 addon:RegisterEvent("PLAYER_LOGIN")
+addon:RegisterEvent("ADDON_LOADED")
 addon:RegisterEvent("TRADE_SKILL_SHOW")
 addon:RegisterEvent("TRADE_SKILL_CLOSE")
 addon:RegisterEvent("SKILL_LINES_CHANGED")
