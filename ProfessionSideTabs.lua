@@ -205,11 +205,6 @@ local function OpenTradeSkill(skillLine)
 end
 
 local function OpenProfessionBySlot(slotNumber)
-    if slotNumber == RUNEFORGING_SLOT then
-        OpenTradeSkill(RUNEFORGING_SKILL_LINE)
-        return
-    end
-
     local professionIndex = select(slotNumber, GetProfessions())
     if not professionIndex then
         return
@@ -518,6 +513,67 @@ local function CreateTabButton(parent, name, onClick)
     return button
 end
 
+local function CreateRuneforgingAction(tab)
+    -- A separate anchor keeps the protected click target off Blizzard's profession frames.
+    local action = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
+    action:EnableMouse(true)
+    action:RegisterForClicks("LeftButtonUp")
+    action:SetAttribute("useOnKeyDown", false)
+    local spellName = C_Spell.GetSpellName(RUNEFORGING_SPELL_ID) or "Runeforging"
+    action:SetAttribute("type1", "macro")
+    action:SetAttribute("macrotext1", "/use " .. spellName)
+    action:Hide()
+    RegisterStateDriver(action, "visibility", "[combat] hide")
+
+    action:SetScript("PreClick", function()
+        CloseArchaeology()
+        if ProfessionsBookFrame and ProfessionsBookFrame:IsShown() then
+            ProfessionsBookFrame:Hide()
+        end
+    end)
+    for _, scriptName in ipairs({ "OnEnter", "OnLeave", "OnMouseDown", "OnMouseUp" }) do
+        local handler = tab:GetScript(scriptName)
+        action:SetScript(scriptName, function()
+            handler(tab)
+        end)
+    end
+
+    tab.runeforgingAction = action
+    return action
+end
+
+local function SyncRuneforgingAction(tab)
+    if InCombatLockdown() then
+        return
+    end
+
+    local left, bottom, width, height = tab:GetRect()
+    if not left then
+        return
+    end
+    local scale = tab:GetEffectiveScale() / UIParent:GetEffectiveScale()
+    left, bottom, width, height = left * scale, bottom * scale, width * scale, height * scale
+
+    local action = tab.runeforgingAction or CreateRuneforgingAction(tab)
+    if left ~= action.tabLeft or bottom ~= action.tabBottom or width ~= action.tabWidth or height ~= action.tabHeight then
+        action:ClearAllPoints()
+        action:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", left, bottom)
+        action:SetSize(width, height)
+        action.tabLeft, action.tabBottom, action.tabWidth, action.tabHeight = left, bottom, width, height
+    end
+    local strata = tab:GetFrameStrata()
+    if action:GetFrameStrata() ~= strata then
+        action:SetFrameStrata(strata)
+    end
+    local level = tab:GetFrameLevel() + 1
+    if action:GetFrameLevel() ~= level then
+        action:SetFrameLevel(level)
+    end
+    if not action:IsShown() then
+        action:Show()
+    end
+end
+
 local function UpdateContainerPosition(panel)
     local container = panel.container
     if not container or container:GetHeight() <= 0 then
@@ -597,6 +653,22 @@ local function EnsurePanel(panel, refresh)
     for i = 1, RUNEFORGING_SLOT do
         panel.buttons[i] = CreateTabButton(container, prefix .. "Tab" .. i)
     end
+
+    local runeforging = panel.buttons[RUNEFORGING_SLOT]
+    runeforging:EnableMouse(false)
+    runeforging:SetScript("OnClick", nil)
+    runeforging:SetScript("OnUpdate", SyncRuneforgingAction)
+    runeforging:SetScript("OnHide", function(tab)
+        local action = tab.runeforgingAction
+        if action then
+            -- Finish a spell click if PreClick just closed the source window.
+            C_Timer.After(0, function()
+                if not tab:IsVisible() and not InCombatLockdown() then
+                    action:Hide()
+                end
+            end)
+        end
+    end)
 
     if type(ToggleProfessionsBook) == "function" then
         local overview = CreateTabButton(container, prefix .. "OverviewTab", OpenProfessionsOverview)
