@@ -4,6 +4,7 @@ local addon = CreateFrame("Frame")
 local container
 local positionAnchor
 local settingsCategory
+local openStandaloneSettings
 local buttons = {}
 local primaryProfessions = {}
 local settingsCheckboxes = {}
@@ -444,10 +445,55 @@ local function UpdateButtons()
     end
 end
 
+local function CreateStandaloneSettingsWindow(title)
+    local window = CreateFrame("Frame", nil, UIParent, "ButtonFrameTemplate")
+    window:Hide()
+    window:SetSize(420, 402)
+    window:SetPoint("CENTER", UIParent, "CENTER")
+    window:SetFrameStrata("DIALOG")
+    window:EnableMouse(true)
+    window:SetMovable(true)
+    window:SetClampedToScreen(true)
+    window:SetTitle(title)
+    ButtonFrameTemplate_HideAttic(window)
+    ButtonFrameTemplate_HidePortrait(window)
+    ButtonFrameTemplate_HideButtonBar(window)
+
+    local titleBar = window.TitleContainer
+    titleBar:SetHitRectInsets(0, window.CloseButton:GetWidth(), 0, 0)
+    titleBar:EnableMouse(true)
+    titleBar:RegisterForDrag("LeftButton")
+    titleBar:SetScript("OnDragStart", function()
+        window:StartMoving()
+    end)
+    titleBar:SetScript("OnDragStop", function()
+        window:StopMovingOrSizing()
+    end)
+    window:SetScript("OnHide", window.StopMovingOrSizing)
+    window.CloseButton:SetScript("OnClick", function()
+        window:Hide()
+    end)
+    return window
+end
+
 local function RegisterSettings()
     -- Keep the controls out of the shared setting lookup used by action-bar mouse clicks.
-    local page = CreateFrame("Frame", nil, UIParent)
-    page:Hide()
+    local title = "Profession Side Tabs"
+    local canvas = CreateFrame("Frame", nil, UIParent)
+    canvas:Hide()
+    local canvasTitle = canvas:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+    canvasTitle:SetPoint("TOPLEFT", 24, -20)
+    canvasTitle:SetText(title)
+    local page = CreateFrame("Frame", nil, canvas)
+
+    local function DockSettingsPage()
+        page:SetParent(canvas)
+        page:ClearAllPoints()
+        page:SetPoint("TOPLEFT", canvas, "TOPLEFT", 0, -36)
+        page:SetPoint("BOTTOMRIGHT", canvas, "BOTTOMRIGHT")
+    end
+    DockSettingsPage()
+
     local y = -20
 
     local function AddText(text, font)
@@ -455,6 +501,11 @@ local function RegisterSettings()
         label:SetPoint("TOPLEFT", 24, y)
         label:SetText(text)
         y = y - 24
+    end
+
+    local function AddSectionHeading(title)
+        y = y - 16
+        AddText(title, "GameFontNormal")
     end
 
     local function AddProfessionCheckbox(slot)
@@ -474,21 +525,19 @@ local function RegisterSettings()
         y = y - 30
     end
 
-    AddText("Profession Side Tabs", "GameFontNormalLarge")
-    y = y - 12
-    AddText("Primary Professions", "GameFontNormal")
+    AddSectionHeading("Primary Professions")
     for slot = 1, 2 do
         AddProfessionCheckbox(slot)
     end
 
     y = y - 8
-    AddText("Secondary Professions", "GameFontNormal")
+    AddSectionHeading("Secondary Professions")
     for slot = 3, 5 do
         AddProfessionCheckbox(slot)
     end
 
     y = y - 8
-    AddText("Panel Position", "GameFontNormal")
+    AddSectionHeading("Panel Position")
     AddText("Vertical Position", "GameFontHighlight")
 
     local sliderOptions = Settings.CreateSliderOptions(0, MAX_PANEL_POSITION, 1)
@@ -499,8 +548,9 @@ local function RegisterSettings()
         return "Bottom"
     end)
     local slider = CreateFrame("Frame", nil, page, "MinimalSliderWithSteppersTemplate")
+    local dockedSliderWidth = 240
     slider:SetPoint("TOPLEFT", 24, y)
-    slider:SetSize(240, 20)
+    slider:SetSize(dockedSliderWidth, 20)
     slider:Init(
         ProfessionSideTabsDB.panelPosition,
         sliderOptions.minValue,
@@ -513,7 +563,7 @@ local function RegisterSettings()
         UpdateContainerPosition()
     end, page)
 
-    function page:OnDefault()
+    function canvas:OnDefault()
         for _, profession in pairs(primaryProfessions) do
             ProfessionSideTabsDB.hiddenPrimaryProfessions[profession.skillLine] = nil
         end
@@ -525,8 +575,57 @@ local function RegisterSettings()
         UpdateButtons()
     end
 
+    local standalone
+    canvas:SetScript("OnShow", function()
+        if standalone then
+            standalone:Hide()
+            DockSettingsPage()
+            slider:SetWidth(dockedSliderWidth)
+        end
+    end)
+
+    openStandaloneSettings = function(resetPosition)
+        if SettingsPanel:IsShown() then
+            SettingsPanel:Close(true)
+            if SettingsPanel:IsShown() then
+                return
+            end
+        end
+
+        if not standalone then
+            standalone = CreateStandaloneSettingsWindow(title)
+        elseif resetPosition then
+            standalone:StopMovingOrSizing()
+            standalone:ClearAllPoints()
+            standalone:SetPoint("CENTER", UIParent, "CENTER")
+        end
+
+        page:SetParent(standalone)
+        page:ClearAllPoints()
+        page:SetPoint("TOPLEFT", standalone, "TOPLEFT", 24, -20)
+        page:SetPoint("BOTTOMRIGHT", standalone, "BOTTOMRIGHT", -24, 16)
+        slider:SetWidth(270)
+        standalone:Show()
+    end
+
+    local popout = CreateFrame("Button", nil, canvas)
+    popout:SetPoint("TOPRIGHT", -18, -16)
+    popout:SetSize(24, 24)
+    popout:SetNormalAtlas("RedButton-Expand")
+    popout:SetPushedAtlas("RedButton-Expand-Pressed")
+    popout:SetHighlightAtlas("RedButton-Highlight", "ADD")
+    popout:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+        GameTooltip:SetText("Open in a movable window")
+        GameTooltip:Show()
+    end)
+    popout:SetScript("OnLeave", GameTooltip_Hide)
+    popout:SetScript("OnClick", function()
+        openStandaloneSettings()
+    end)
+
     RefreshSettingsCheckboxes()
-    local category = Settings.RegisterCanvasLayoutCategory(page, "Profession Side Tabs")
+    local category = Settings.RegisterCanvasLayoutCategory(canvas, title)
     Settings.RegisterAddOnCategory(category)
     settingsCategory = category
 end
@@ -612,6 +711,17 @@ SlashCmdList["PROFESSIONSIDETABS"] = function(msg)
     EnsureDB()
 
     local cmd, arg = msg:match("^(%S+)%s*(%S*)$")
+    if cmd == "window" and openStandaloneSettings then
+        if arg == "" or arg == "reset" then
+            C_Timer.After(0, function()
+                openStandaloneSettings(arg == "reset")
+            end)
+        else
+            print("|cff00ff98PST|r usage: /pst window [reset]")
+        end
+        return
+    end
+
     if cmd == "archy" then
         cmd = "archaeology"
     end
@@ -649,6 +759,7 @@ SlashCmdList["PROFESSIONSIDETABS"] = function(msg)
     end
 
     print("|cff00ff98PST|r commands:")
+    print("|cff00ff98PST|r /pst window [reset]")
     print("|cff00ff98PST|r /pst archy show/hide")
     print("|cff00ff98PST|r /pst fishing show/hide")
     print("|cff00ff98PST|r /pst cooking show/hide")
