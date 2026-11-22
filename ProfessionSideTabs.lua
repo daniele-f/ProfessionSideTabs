@@ -9,6 +9,7 @@ local primaryProfessions = {}
 local primaryCheckboxes = {}
 local secondaryCheckboxes = {}
 local runeforgingCheckbox
+local professionSkillCheckboxes = {}
 
 local BUTTON_SIZE = 48
 local BUTTON_GAP = 6
@@ -71,6 +72,21 @@ local secondaryProfessions = {
     [5] = { key = "showCooking", name = "Cooking", default = true },
 }
 
+local professionSkills = {
+    { key = "disenchant", name = "Disenchant", spellID = 13262 },
+    { key = "milling", name = "Milling", recipeIDs = { 1269575, 444181, 382981 } },
+    { key = "prospecting", name = "Prospecting", recipeIDs = { 1231127, 434018, 374627 } },
+    { key = "skinning", name = "Skinning", spellID = 8613 },
+    { key = "cookingFire", name = "Cooking Fire", spellID = 818 },
+    { key = "fishing", name = "Fishing Skill", spellID = 131474 },
+    { key = "survey", name = "Survey", spellID = 80451 },
+}
+local professionSkillSlots = {}
+local lastTabSlot = RUNEFORGING_SLOT + #professionSkills
+for index = 1, #professionSkills do
+    professionSkillSlots[index] = RUNEFORGING_SLOT + index
+end
+
 local function EnsureDB()
     if type(ProfessionSideTabsDB) ~= "table" then
         ProfessionSideTabsDB = {}
@@ -78,6 +94,10 @@ local function EnsureDB()
 
     if type(ProfessionSideTabsDB.hiddenPrimaryProfessions) ~= "table" then
         ProfessionSideTabsDB.hiddenPrimaryProfessions = {}
+    end
+
+    if type(ProfessionSideTabsDB.shownProfessionSkills) ~= "table" then
+        ProfessionSideTabsDB.shownProfessionSkills = {}
     end
 
     if not tabStyles[ProfessionSideTabsDB.tabStyle] then
@@ -187,21 +207,33 @@ local function OpenArchaeology()
     ShowArchaeology()
 end
 
-local function OpenTradeSkill(skillLine)
+local function CloseOtherProfessionWindows()
     local archaeology = CloseArchaeology()
     local overview = ProfessionsBookFrame
-    local wasOverviewOpen = overview and overview:IsShown()
-    if wasOverviewOpen then
+    if overview and overview:IsShown() then
         overview:Hide()
+    else
+        overview = nil
     end
+    return archaeology, overview
+end
 
+local function OpenTradeSkill(skillLine)
+    local archaeology, overview = CloseOtherProfessionWindows()
     if not C_TradeSkillUI.OpenTradeSkill(skillLine) then
         if archaeology then
             ShowUIPanel(archaeology)
         end
-        if wasOverviewOpen then
+        if overview then
             overview:Show()
         end
+    end
+end
+
+local function OpenProfessionSkillRecipe(button)
+    if button.professionData and not InCombatLockdown() then
+        CloseOtherProfessionWindows()
+        C_TradeSkillUI.OpenRecipe(button.professionData.recipeID)
     end
 end
 
@@ -277,6 +309,22 @@ local function SetSecondaryShown(slot, shown)
     ProfessionSideTabsDB[secondaryProfessions[slot].key] = shown
 end
 
+local function GetProfessionSkillAction(skill)
+    if skill.spellID then
+        if C_SpellBook.IsSpellKnown(skill.spellID)
+            or (C_SpellBook.FindSpellBookSlotForSpell and C_SpellBook.FindSpellBookSlotForSpell(skill.spellID, false, false))
+        then
+            return skill.spellID
+        end
+    elseif C_TradeSkillUI.IsRecipeProfessionLearned then
+        for _, recipeID in ipairs(skill.recipeIDs) do
+            if C_TradeSkillUI.IsRecipeProfessionLearned(recipeID) then
+                return recipeID
+            end
+        end
+    end
+end
+
 local function IsDeathKnight()
     return select(2, UnitClass("player")) == "DEATHKNIGHT"
 end
@@ -324,6 +372,12 @@ local function UpdateButtonTooltip(self)
 
     GameTooltip:SetOwner(self, "ANCHOR_NONE")
     GameTooltip:SetPoint("LEFT", self, "RIGHT", 12, 0)
+    local spellID = self.professionData.spellID
+    if spellID and GameTooltip:SetSpellByID(spellID) then
+        GameTooltip:Show()
+        return
+    end
+
     GameTooltip:AddLine(self.professionData.name or UNKNOWN, 1, 0.82, 0)
 
     local bonusText = ""
@@ -513,24 +567,21 @@ local function CreateTabButton(parent, name, onClick)
     return button
 end
 
-local function CreateRuneforgingAction(tab)
+local function CreateSpellAction(tab)
     -- A separate anchor keeps the protected click target off Blizzard's profession frames.
     local action = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
     action:EnableMouse(true)
     action:RegisterForClicks("LeftButtonUp")
     action:SetAttribute("useOnKeyDown", false)
-    local spellName = C_Spell.GetSpellName(RUNEFORGING_SPELL_ID) or "Runeforging"
+    local spellName = C_Spell.GetSpellName(tab.spellID) or tab.spellName
     action:SetAttribute("type1", "macro")
     action:SetAttribute("macrotext1", "/use " .. spellName)
     action:Hide()
     RegisterStateDriver(action, "visibility", "[combat] hide")
 
-    action:SetScript("PreClick", function()
-        CloseArchaeology()
-        if ProfessionsBookFrame and ProfessionsBookFrame:IsShown() then
-            ProfessionsBookFrame:Hide()
-        end
-    end)
+    if tab.spellID == RUNEFORGING_SPELL_ID then
+        action:SetScript("PreClick", CloseOtherProfessionWindows)
+    end
     for _, scriptName in ipairs({ "OnEnter", "OnLeave", "OnMouseDown", "OnMouseUp" }) do
         local handler = tab:GetScript(scriptName)
         action:SetScript(scriptName, function()
@@ -538,11 +589,11 @@ local function CreateRuneforgingAction(tab)
         end)
     end
 
-    tab.runeforgingAction = action
+    tab.spellAction = action
     return action
 end
 
-local function SyncRuneforgingAction(tab)
+local function SyncSpellAction(tab)
     if InCombatLockdown() then
         return
     end
@@ -554,7 +605,7 @@ local function SyncRuneforgingAction(tab)
     local scale = tab:GetEffectiveScale() / UIParent:GetEffectiveScale()
     left, bottom, width, height = left * scale, bottom * scale, width * scale, height * scale
 
-    local action = tab.runeforgingAction or CreateRuneforgingAction(tab)
+    local action = tab.spellAction or CreateSpellAction(tab)
     if left ~= action.tabLeft or bottom ~= action.tabBottom or width ~= action.tabWidth or height ~= action.tabHeight then
         action:ClearAllPoints()
         action:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", left, bottom)
@@ -572,6 +623,25 @@ local function SyncRuneforgingAction(tab)
     if not action:IsShown() then
         action:Show()
     end
+end
+
+local function ConfigureSpellTab(tab, spellID, spellName)
+    tab.spellID = spellID
+    tab.spellName = spellName
+    tab:EnableMouse(false)
+    tab:SetScript("OnClick", nil)
+    tab:SetScript("OnUpdate", SyncSpellAction)
+    tab:SetScript("OnHide", function(self)
+        local action = self.spellAction
+        if action then
+            -- Finish a spell click if PreClick just closed the source window.
+            C_Timer.After(0, function()
+                if not self:IsVisible() and not InCombatLockdown() then
+                    action:Hide()
+                end
+            end)
+        end
+    end)
 end
 
 local function UpdateContainerPosition(panel)
@@ -646,6 +716,7 @@ local function EnsurePanel(panel, refresh)
     container.bottom:SetColorTexture(0.6, 0.6, 0.6, 0.8)
 
     container.divider = CreateDivider(container)
+    container.professionSkillsDivider = CreateDivider(container)
     container.runeforgingDivider = CreateDivider(container)
 
     container:Hide()
@@ -654,21 +725,15 @@ local function EnsurePanel(panel, refresh)
         panel.buttons[i] = CreateTabButton(container, prefix .. "Tab" .. i)
     end
 
-    local runeforging = panel.buttons[RUNEFORGING_SLOT]
-    runeforging:EnableMouse(false)
-    runeforging:SetScript("OnClick", nil)
-    runeforging:SetScript("OnUpdate", SyncRuneforgingAction)
-    runeforging:SetScript("OnHide", function(tab)
-        local action = tab.runeforgingAction
-        if action then
-            -- Finish a spell click if PreClick just closed the source window.
-            C_Timer.After(0, function()
-                if not tab:IsVisible() and not InCombatLockdown() then
-                    action:Hide()
-                end
-            end)
+    ConfigureSpellTab(panel.buttons[RUNEFORGING_SLOT], RUNEFORGING_SPELL_ID, "Runeforging")
+    for index, skill in ipairs(professionSkills) do
+        local slot = professionSkillSlots[index]
+        local button = CreateTabButton(container, prefix .. "Tab" .. slot, OpenProfessionSkillRecipe)
+        if skill.spellID then
+            ConfigureSpellTab(button, skill.spellID, skill.name)
         end
-    end)
+        panel.buttons[slot] = button
+    end
 
     if type(ToggleProfessionsBook) == "function" then
         local overview = CreateTabButton(container, prefix .. "OverviewTab", OpenProfessionsOverview)
@@ -736,6 +801,15 @@ local function LayoutButtons(panel, style)
     local hasSecondary = secondaryEnd > secondaryStart
 
     local contentHeight = hasSecondary and secondaryEnd or primaryEnd
+    local skillsStart = contentHeight + (contentHeight > 0 and style.groupGap or 0)
+    local skillsEnd = LayoutButtonGroup(panel, professionSkillSlots, skillsStart, style)
+    local hasSkills = skillsEnd > skillsStart
+    PositionDivider(container.professionSkillsDivider, container, contentHeight,
+        isPanel and hasSkills and contentHeight > 0)
+    if hasSkills then
+        contentHeight = skillsEnd
+    end
+
     local runeforging = panel.buttons[RUNEFORGING_SLOT]
     local hasRuneforging = runeforging:IsShown()
     PositionDivider(container.divider, container, primaryEnd, isPanel and hasPrimary and hasSecondary)
@@ -768,7 +842,7 @@ local function UpdatePanel(panel, professions, currentSkillLine, style)
         anyButtonShown = showOverview
     end
 
-    for slot = 1, RUNEFORGING_SLOT do
+    for slot = 1, lastTabSlot do
         local button = panel.buttons[slot]
         local data = professions[slot]
         if data then
@@ -777,7 +851,7 @@ local function UpdatePanel(panel, professions, currentSkillLine, style)
             button.professionData = data
             button.icon:SetTexture(data.icon or 134400)
             button:Show()
-            local isSelected = (panel == craftingPanel and currentSkillLine == data.skillLine)
+            local isSelected = (panel == craftingPanel and data.skillLine ~= nil and currentSkillLine == data.skillLine)
                 or (panel == archaeologyPanel and slot == 3)
             UpdateButtonState(button, isSelected)
             anyButtonShown = true
@@ -820,6 +894,25 @@ local function UpdateButtons()
         }
     end
 
+    for index, skill in ipairs(professionSkills) do
+        local actionID = GetProfessionSkillAction(skill)
+        local shown = ProfessionSideTabsDB.shownProfessionSkills[skill.key] == true
+        local checkbox = professionSkillCheckboxes[index]
+        if checkbox then
+            checkbox.label:SetText(skill.name .. (actionID and "" or " (Not learned)"))
+            checkbox:GetCheckedTexture():SetDesaturated(not actionID)
+            checkbox:SetChecked(shown)
+        end
+        if shown and actionID then
+            professions[professionSkillSlots[index]] = {
+                name = C_Spell.GetSpellName(actionID) or skill.name,
+                icon = C_Spell.GetSpellTexture(actionID),
+                spellID = actionID,
+                recipeID = skill.recipeIDs and actionID or nil,
+            }
+        end
+    end
+
     local currentSkillLine = GetCurrentOpenSkillLine()
     local style = tabStyles[ProfessionSideTabsDB.tabStyle]
     for _, panel in ipairs(panels) do
@@ -830,10 +923,17 @@ local function UpdateButtons()
     end
 end
 
-local function CreateStandaloneSettingsWindow(title)
+local function CreateStandaloneSettingsWindow(title, height)
     local window = CreateFrame("Frame", nil, UIParent, "ButtonFrameTemplate")
     window:Hide()
-    window:SetSize(650, 688)
+    local width = 650
+    window:SetSize(width, height)
+    window:HookScript("OnShow", function(self)
+        local screenWidth, screenHeight = UIParent:GetWidth(), UIParent:GetHeight()
+        if screenWidth and screenWidth > 16 and screenHeight > 16 then
+            self:SetScale(math.min(1, (screenWidth - 16) / width, (screenHeight - 16) / height))
+        end
+    end)
     window:SetPoint("CENTER", UIParent, "CENTER")
     window:SetFrameStrata("DIALOG")
     window:EnableMouse(true)
@@ -987,6 +1087,18 @@ local function RegisterSettings()
     y = y - checkboxRowHeight
 
     y = y - 8
+    AddSectionHeading("Profession Skills")
+    for index, skill in ipairs(professionSkills) do
+        local column = (index - 1) % columns
+        local row = math.floor((index - 1) / columns)
+        professionSkillCheckboxes[index] = AddCheckbox(skill.name, function(self)
+            ProfessionSideTabsDB.shownProfessionSkills[skill.key] = self:GetChecked() and true or nil
+            UpdateButtons()
+        end, optionX + column * columnWidth, y - row * checkboxRowHeight)
+    end
+    y = y - math.ceil(#professionSkills / columns) * checkboxRowHeight
+
+    y = y - 8
     AddSectionHeading("Death Knights")
     runeforgingCheckbox = AddCheckbox("", function(self)
         ProfessionSideTabsDB.showRuneforging = not not self:GetChecked()
@@ -1035,6 +1147,7 @@ local function RegisterSettings()
 
     function canvas:OnDefault()
         ProfessionSideTabsDB.hiddenPrimaryProfessions = {}
+        ProfessionSideTabsDB.shownProfessionSkills = {}
         for _, profession in pairs(secondaryProfessions) do
             ProfessionSideTabsDB[profession.key] = profession.default
         end
@@ -1072,7 +1185,7 @@ local function RegisterSettings()
         end
 
         if not standalone then
-            standalone = CreateStandaloneSettingsWindow(title)
+            standalone = CreateStandaloneSettingsWindow(title, content:GetHeight() + 50)
         elseif resetPosition then
             standalone:StopMovingOrSizing()
             standalone:ClearAllPoints()
