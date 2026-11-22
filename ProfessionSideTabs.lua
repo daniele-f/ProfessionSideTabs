@@ -38,6 +38,7 @@ local tabStyles = {
     Forever = { width = 50, height = 56, gap = 3, left = 1, groupGap = 8 },
 }
 
+local DEFAULT_TAB_STYLE = "Forever"
 local DEFAULT_PANEL_POSITION = 0
 local MAX_PANEL_POSITION = 100
 local MIN_PANEL_SIZE = 75
@@ -80,7 +81,7 @@ local function EnsureDB()
     end
 
     if not tabStyles[ProfessionSideTabsDB.tabStyle] then
-        ProfessionSideTabsDB.tabStyle = "Panel"
+        ProfessionSideTabsDB.tabStyle = DEFAULT_TAB_STYLE
     end
     for _, panel in ipairs(panels) do
         if panel.option and ProfessionSideTabsDB[panel.option] == nil then
@@ -291,8 +292,8 @@ local function RefreshSettingsCheckboxes()
         end
         runeforgingCheckbox.label:SetText(label)
         runeforgingCheckbox.label:SetAlpha(isDeathKnight and 1 or 0.5)
-        runeforgingCheckbox:SetEnabled(isDeathKnight)
-        runeforgingCheckbox:SetChecked(isDeathKnight and ProfessionSideTabsDB.showRuneforging)
+        runeforgingCheckbox:GetCheckedTexture():SetDesaturated(not isDeathKnight)
+        runeforgingCheckbox:SetChecked(ProfessionSideTabsDB.showRuneforging)
     end
 
     for option, checkbox in pairs(windowCheckboxes) do
@@ -308,11 +309,10 @@ local function RefreshSettingsCheckboxes()
     end
 
     for slot, checkbox in pairs(secondaryCheckboxes) do
-        local label = "Show " .. secondaryProfessions[slot].name
-        if not select(slot, GetProfessions()) then
-            label = label .. " (Not learned)"
-        end
-        checkbox.label:SetText(label)
+        local learned = select(slot, GetProfessions()) ~= nil
+        local name = secondaryProfessions[slot].name
+        checkbox.label:SetText(name .. (learned and "" or " (Not learned)"))
+        checkbox:GetCheckedTexture():SetDesaturated(not learned)
         checkbox:SetChecked(IsSecondaryShown(slot))
     end
 end
@@ -933,7 +933,7 @@ local function RegisterSettings()
     styleDropdown:SetWidth(150)
     styleDropdown:SetText(ProfessionSideTabsDB.tabStyle)
     styleDropdown:SetupMenu(function(_, menu)
-        for _, styleName in ipairs({ "Panel", "Forever" }) do
+        for _, styleName in ipairs({ "Forever", "Panel" }) do
             menu:CreateRadio(styleName, function()
                 return ProfessionSideTabsDB.tabStyle == styleName
             end, function()
@@ -1046,10 +1046,10 @@ local function RegisterSettings()
                 ProfessionSideTabsDB[panel.option] = true
             end
         end
-        ProfessionSideTabsDB.tabStyle = "Panel"
+        ProfessionSideTabsDB.tabStyle = DEFAULT_TAB_STYLE
         positionSlider:SetValue(DEFAULT_PANEL_POSITION)
         sizeSlider:SetValue(DEFAULT_PANEL_SIZE)
-        styleDropdown:SetText("Panel")
+        styleDropdown:SetText(DEFAULT_TAB_STYLE)
         UpdateButtons()
     end
 
