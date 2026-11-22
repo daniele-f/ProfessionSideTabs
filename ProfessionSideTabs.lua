@@ -30,7 +30,7 @@ local panels = { craftingPanel, bookPanel, archaeologyPanel }
 
 local tabStyles = {
     Panel = { width = BUTTON_SIZE, height = BUTTON_SIZE, gap = BUTTON_GAP, left = 9, groupGap = GROUP_SPACER },
-    Forever = { width = 56, height = 56, gap = 3, left = 1, groupGap = 8 },
+    Forever = { width = 50, height = 56, gap = 3, left = 1, groupGap = 8 },
 }
 
 local DEFAULT_PANEL_POSITION = 0
@@ -40,7 +40,7 @@ local LEGACY_SEPARATOR_DEPTH = 2 * (BUTTON_SIZE + BUTTON_GAP) + DIVIDER_TOP_GAP 
 local LEGACY_PANEL_HEIGHT = 5 * (BUTTON_SIZE + BUTTON_GAP) + GROUP_SPACER + PANEL_HEIGHT_PADDING
 
 local secondaryProfessions = {
-    [3] = { key = "showArchaeology", name = "Archaeology", default = false },
+    [3] = { key = "showArchaeology", name = "Archaeology", default = true },
     [4] = { key = "showFishing", name = "Fishing", default = true },
     [5] = { key = "showCooking", name = "Cooking", default = true },
 }
@@ -59,7 +59,7 @@ local function EnsureDB()
     end
     for _, panel in ipairs(panels) do
         if panel.option and ProfessionSideTabsDB[panel.option] == nil then
-            ProfessionSideTabsDB[panel.option] = false
+            ProfessionSideTabsDB[panel.option] = true
         end
     end
 
@@ -314,11 +314,14 @@ local function UpdateButtonState(button, isSelected)
 end
 
 local function PositionButtonIcon(button, pressed)
-    local inset = button.tabStyle == tabStyles.Forever and 7 or 5
+    local isForever = button.tabStyle == tabStyles.Forever
+    local xInset = isForever and 4 or 5
+    local yInset = isForever and 7 or 5
     local shift = pressed and 1 or 0
+    local xShift = shift - (isForever and 2 or 0)
     button.icon:ClearAllPoints()
-    button.icon:SetPoint("TOPLEFT", inset + shift, -inset - shift)
-    button.icon:SetPoint("BOTTOMRIGHT", -inset + shift, inset - shift)
+    button.icon:SetPoint("TOPLEFT", xInset + xShift, -yInset - shift)
+    button.icon:SetPoint("BOTTOMRIGHT", -xInset + xShift, yInset - shift)
 end
 
 local function CreateForeverMask(button, texture)
@@ -837,7 +840,7 @@ local function RegisterSettings()
         ProfessionSideTabsDB.panelPosition = DEFAULT_PANEL_POSITION
         for _, panel in ipairs(panels) do
             if panel.option then
-                ProfessionSideTabsDB[panel.option] = false
+                ProfessionSideTabsDB[panel.option] = true
             end
         end
         ProfessionSideTabsDB.tabStyle = "Panel"
