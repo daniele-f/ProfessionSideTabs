@@ -225,6 +225,14 @@ local function PositionButtonIcon(button, pressed)
     button.icon:SetPoint("BOTTOMRIGHT", -inset + shift, inset - shift)
 end
 
+local function CreateForeverMask(button, texture)
+    local mask = button:CreateMaskTexture()
+    mask:SetTexture("Interface\\AddOns\\" .. addonName .. "\\assets\\ForeverIconMask.tga",
+        "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+    mask:SetAllPoints(texture)
+    return mask
+end
+
 local function ApplyButtonStyle(button, style)
     if button.tabStyle == style then
         return
@@ -238,13 +246,18 @@ local function ApplyButtonStyle(button, style)
     button.selectedGlow:ClearAllPoints()
     if isForever then
         if not button.foreverIconMask then
-            local mask = button:CreateMaskTexture()
-            mask:SetTexture("Interface\\AddOns\\" .. addonName .. "\\assets\\ForeverIconMask.tga",
-                "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-            mask:SetAllPoints(button.icon)
-            button.foreverIconMask = mask
+            button.foreverIconMask = CreateForeverMask(button, button.icon)
+
+            -- Cover the inset trim while keeping the outside edge of the tab art visible.
+            local inset = button:CreateTexture(nil, "BORDER")
+            inset:SetPoint("TOPLEFT", 1, -5)
+            inset:SetPoint("BOTTOMRIGHT", -7, 5)
+            inset:SetColorTexture(0.03, 0.03, 0.03, 1)
+            inset:AddMaskTexture(CreateForeverMask(button, inset))
+            button.foreverInset = inset
         end
         button.icon:AddMaskTexture(button.foreverIconMask)
+        button.foreverInset:Show()
         button.bg:SetAtlas("common-sidetab")
         button.hoverGlow:SetAtlas("common-sidetab-hover")
         button.selectedGlow:SetAtlas("common-sidetab-selected")
@@ -253,6 +266,7 @@ local function ApplyButtonStyle(button, style)
         button.selectedGlow:SetAlpha(1)
     else
         button.icon:RemoveMaskTexture(button.foreverIconMask)
+        button.foreverInset:Hide()
         button.bg:SetColorTexture(0.10, 0.09, 0.08, 0.95)
         button.hoverGlow:SetTexture("Interface\\Buttons\\ButtonHilight-Square")
         button.hoverGlow:SetTexCoord(0, 1, 0, 1)
