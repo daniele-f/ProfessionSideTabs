@@ -13,8 +13,11 @@ local professionSkillCheckboxes = {}
 local skillPlacementCheckbox, skillHoverCheckbox
 
 local BUTTON_SIZE = 48
+local ATTACHED_SKILL_SIZE = 38
+local PANEL_BG_R, PANEL_BG_G, PANEL_BG_B = 0.14, 0.12, 0.10
 local BUTTON_GAP = 6
 local GROUP_SPACER = 14
+local PANEL_BORDER_WIDTH = 2
 local DIVIDER_HEIGHT = 8
 local DIVIDER_TOP_GAP = 4
 local PANEL_HEIGHT_PADDING = 10
@@ -36,8 +39,8 @@ local archaeologyPanel = {
 local panels = { craftingPanel, bookPanel, archaeologyPanel }
 
 local tabStyles = {
-    Panel = { width = BUTTON_SIZE, height = BUTTON_SIZE, gap = BUTTON_GAP, left = 9, groupGap = GROUP_SPACER },
-    Forever = { width = 50, height = 56, gap = 3, left = 1, groupGap = 8 },
+    Panel = { width = BUTTON_SIZE, height = BUTTON_SIZE, gap = BUTTON_GAP, left = 9, groupGap = GROUP_SPACER, skillOverlap = PANEL_BORDER_WIDTH },
+    Forever = { width = 50, height = 56, gap = 3, left = 1, groupGap = 8, skillOverlap = 6 },
 }
 
 local DEFAULT_TAB_STYLE = "Forever"
@@ -424,10 +427,10 @@ end
 
 local function PositionButtonIcon(button, pressed)
     local isForever = button.tabStyle == tabStyles.Forever
-    local xInset = isForever and 4 or 5
-    local yInset = isForever and 7 or 5
+    local xInset = isForever and not button.compactSkill and 4 or 5
+    local yInset = isForever and not button.compactSkill and 7 or 5
     local shift = pressed and 1 or 0
-    local xShift = shift - (isForever and 2 or 0)
+    local xShift = shift + (button.compactSkill and 1 or (isForever and -2 or 0))
     button.icon:ClearAllPoints()
     button.icon:SetPoint("TOPLEFT", xInset + xShift, -yInset - shift)
     button.icon:SetPoint("BOTTOMRIGHT", -xInset + xShift, yInset - shift)
@@ -441,16 +444,69 @@ local function CreateForeverMask(button, texture)
     return mask
 end
 
-local function ApplyButtonStyle(button, style)
-    if button.tabStyle == style then
+local function CreatePanelTrim(frame)
+    local top = frame:CreateTexture(nil, "BORDER")
+    top:SetPoint("TOPLEFT")
+    top:SetPoint("TOPRIGHT")
+    top:SetHeight(PANEL_BORDER_WIDTH)
+
+    local right = frame:CreateTexture(nil, "BORDER")
+    right:SetPoint("TOPRIGHT")
+    right:SetPoint("BOTTOMRIGHT")
+    right:SetWidth(PANEL_BORDER_WIDTH)
+
+    local bottom = frame:CreateTexture(nil, "BORDER")
+    bottom:SetPoint("BOTTOMLEFT")
+    bottom:SetPoint("BOTTOMRIGHT")
+    bottom:SetHeight(PANEL_BORDER_WIDTH)
+
+    local trim = { top = top, right = right, bottom = bottom }
+    for _, edge in pairs(trim) do
+        edge:SetColorTexture(0.6, 0.6, 0.6, 0.8)
+    end
+    return trim
+end
+
+local function ApplyButtonStyle(button, style, attachedSkill)
+    local isForever = style == tabStyles.Forever
+    local compact = attachedSkill == true
+    local styleChanged = button.tabStyle ~= style
+    if not styleChanged and button.compactSkill == compact then
         return
     end
 
+    if compact and isForever then
+        button.normalFrameLevel = button.normalFrameLevel or button:GetFrameLevel()
+        button:SetFrameLevel(math.max(0, button.normalFrameLevel - 1))
+    elseif button.normalFrameLevel then
+        button:SetFrameLevel(button.normalFrameLevel)
+        button.normalFrameLevel = nil
+    end
+
+    button.compactSkill = compact
     button.tabStyle = style
-    button:SetSize(style.width, style.height)
-    local isForever = style == tabStyles.Forever
-    button.border:SetShown(not isForever)
-    button.leftFlair:SetShown(not isForever)
+    button:SetSize(compact and ATTACHED_SKILL_SIZE or style.width, compact and ATTACHED_SKILL_SIZE or style.height)
+    local panelExtension = compact and not isForever
+    if panelExtension and not button.panelTrim then
+        button.panelTrim = CreatePanelTrim(button)
+    end
+    if button.panelTrim then
+        for _, edge in pairs(button.panelTrim) do
+            edge:SetShown(panelExtension)
+        end
+    end
+    if panelExtension then
+        -- Cover the panel's side trim where the skill extends from it.
+        button.bg:SetColorTexture(PANEL_BG_R, PANEL_BG_G, PANEL_BG_B, 1)
+    elseif not isForever then
+        button.bg:SetColorTexture(0.10, 0.09, 0.08, 0.95)
+    end
+    button.border:SetShown(not isForever and not panelExtension)
+    button.leftFlair:SetShown(not isForever and not panelExtension)
+    if not styleChanged then
+        PositionButtonIcon(button, false)
+        return
+    end
     button.selectedGlow:ClearAllPoints()
     if isForever then
         if not button.foreverIconMask then
@@ -475,7 +531,6 @@ local function ApplyButtonStyle(button, style)
     else
         button.icon:RemoveMaskTexture(button.foreverIconMask)
         button.foreverInset:Hide()
-        button.bg:SetColorTexture(0.10, 0.09, 0.08, 0.95)
         button.hoverGlow:SetTexture("Interface\\Buttons\\ButtonHilight-Square")
         button.hoverGlow:SetTexCoord(0, 1, 0, 1)
         button.selectedGlow:SetTexture("Interface\\Buttons\\CheckButtonGlow")
@@ -491,6 +546,7 @@ end
 local function CreateTabButton(parent, name, onClick)
     local button = CreateFrame("Button", name, parent)
     button.tabStyle = tabStyles.Panel
+    button.compactSkill = false
     button:SetSize(BUTTON_SIZE, BUTTON_SIZE)
 
     local bg = button:CreateTexture(nil, "BACKGROUND")
@@ -627,6 +683,12 @@ local function SyncSpellAction(tab)
     if not left then
         return
     end
+    if tab.compactSkill then
+        -- Only the exposed part of the attached skill receives clicks.
+        local overlap = tab.tabStyle.skillOverlap
+        left = left + overlap
+        width = width - overlap
+    end
     local scale = tab:GetEffectiveScale() / UIParent:GetEffectiveScale()
     left, bottom, width, height = left * scale, bottom * scale, width * scale, height * scale
 
@@ -720,25 +782,10 @@ local function EnsurePanel(panel, refresh)
 
     container.bg = container:CreateTexture(nil, "BACKGROUND")
     container.bg:SetAllPoints()
-    container.bg:SetColorTexture(0.14, 0.12, 0.10, 0.94)
+    container.bg:SetColorTexture(PANEL_BG_R, PANEL_BG_G, PANEL_BG_B, 0.94)
 
-    container.top = container:CreateTexture(nil, "BORDER")
-    container.top:SetPoint("TOPLEFT")
-    container.top:SetPoint("TOPRIGHT")
-    container.top:SetHeight(2)
-    container.top:SetColorTexture(0.6, 0.6, 0.6, 0.8)
-
-    container.right = container:CreateTexture(nil, "BORDER")
-    container.right:SetPoint("TOPRIGHT")
-    container.right:SetPoint("BOTTOMRIGHT")
-    container.right:SetWidth(2)
-    container.right:SetColorTexture(0.6, 0.6, 0.6, 0.8)
-
-    container.bottom = container:CreateTexture(nil, "BORDER")
-    container.bottom:SetPoint("BOTTOMLEFT")
-    container.bottom:SetPoint("BOTTOMRIGHT")
-    container.bottom:SetHeight(2)
-    container.bottom:SetColorTexture(0.6, 0.6, 0.6, 0.8)
+    local trim = CreatePanelTrim(container)
+    container.top, container.right, container.bottom = trim.top, trim.right, trim.bottom
 
     container.divider = CreateDivider(container)
     container.professionSkillsDivider = CreateDivider(container)
@@ -805,7 +852,7 @@ local function PositionDivider(divider, container, groupEnd, shown)
     divider:SetShown(shown)
 end
 
-local function LayoutAttachedSkills(panel, style)
+local function LayoutAttachedSkills(panel)
     for slot = 1, 5 do
         panel.buttons[slot].attachedSkill = nil
     end
@@ -830,7 +877,9 @@ local function LayoutAttachedSkills(panel, style)
                 owner.attachedSkill = tab
                 tab.skillOwner = owner
                 tab:ClearAllPoints()
-                tab:SetPoint("TOPLEFT", owner, "TOPRIGHT", style == tabStyles.Panel and 12 or 4, 0)
+                local style = tab.tabStyle
+                local panelInset = style == tabStyles.Panel and (panel.container:GetWidth() - style.left - style.width) or 0
+                tab:SetPoint("LEFT", owner, "RIGHT", panelInset - style.skillOverlap, 0)
                 tab:SetShown(not hoverOnly or owner.mouseOver or tab.mouseOver or false)
             else
                 tab:Hide()
@@ -859,7 +908,7 @@ local function LayoutButtons(panel, style)
     local hasSecondary = secondaryEnd > secondaryStart
 
     local contentHeight = hasSecondary and secondaryEnd or primaryEnd
-    LayoutAttachedSkills(panel, style)
+    LayoutAttachedSkills(panel)
     if ProfessionSideTabsDB.skillsBesideProfessions then
         container.professionSkillsDivider:Hide()
         container.secondarySkillsDivider:Hide()
@@ -917,11 +966,12 @@ local function UpdatePanel(panel, professions, currentSkillLine, style)
         local button = panel.buttons[slot]
         local data = professions[slot]
         if data then
-            ApplyButtonStyle(button, style)
+            local attachedSkill = ProfessionSideTabsDB.skillsBesideProfessions and slot > RUNEFORGING_SLOT
+            ApplyButtonStyle(button, style, attachedSkill)
             button.slotNumber = slot
             button.professionData = data
             button.icon:SetTexture(data.icon or 134400)
-            if not ProfessionSideTabsDB.skillsBesideProfessions or slot <= RUNEFORGING_SLOT then
+            if not attachedSkill then
                 button:Show()
                 anyButtonShown = true
             end
