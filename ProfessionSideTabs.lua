@@ -49,6 +49,11 @@ local LEGACY_FRAME_HEIGHT = 658
 local LEGACY_SEPARATOR_DEPTH = 2 * (BUTTON_SIZE + BUTTON_GAP) + DIVIDER_TOP_GAP + DIVIDER_HEIGHT / 2
 local LEGACY_PANEL_HEIGHT = 5 * (BUTTON_SIZE + BUTTON_GAP) + GROUP_SPACER + PANEL_HEIGHT_PADDING
 
+local professionJournalSpells = {
+    [182] = 193290, -- Herbalism Journal
+    [393] = 194174, -- Skinning Journal
+}
+
 local primaryProfessionOptions = {
     { skillLine = 171, name = "Alchemy" },
     { skillLine = 164, name = "Blacksmithing" },
@@ -74,12 +79,11 @@ local secondaryProfessions = {
 
 local professionSkills = {
     { key = "disenchant", name = "Disenchant", spellID = 13262 },
-    { key = "milling", name = "Milling", recipeIDs = { 1269575, 444181, 382981 } },
-    { key = "prospecting", name = "Prospecting", recipeIDs = { 1231127, 434018, 374627 } },
     { key = "skinning", name = "Skinning", spellID = 8613 },
     { key = "cookingFire", name = "Cooking Fire", spellID = 818 },
-    { key = "fishing", name = "Fishing Skill", spellID = 131474 },
+    { key = "fishing", name = "Fishing", spellID = 131474 },
     { key = "survey", name = "Survey", spellID = 80451 },
+    { key = "herbGathering", name = "Herb Gathering", spellID = 2366 },
 }
 local professionSkillSlots = {}
 local lastTabSlot = RUNEFORGING_SLOT + #professionSkills
@@ -230,13 +234,6 @@ local function OpenTradeSkill(skillLine)
     end
 end
 
-local function OpenProfessionSkillRecipe(button)
-    if button.professionData and not InCombatLockdown() then
-        CloseOtherProfessionWindows()
-        C_TradeSkillUI.OpenRecipe(button.professionData.recipeID)
-    end
-end
-
 local function OpenProfessionBySlot(slotNumber)
     local professionIndex = select(slotNumber, GetProfessions())
     if not professionIndex then
@@ -276,11 +273,16 @@ local function GetProfessionDataBySlot(slotNumber)
         return nil
     end
 
-    local name, icon, skillLevel, maxSkillLevel, numAbilities, spellOffset, skillLine, skillModifier =
+    local name, icon, skillLevel, maxSkillLevel, _, _, skillLine, skillModifier =
         GetProfessionInfo(professionIndex)
 
     if not skillLine then
         return nil
+    end
+
+    local journalSpellID = professionJournalSpells[skillLine]
+    if journalSpellID then
+        icon = C_Spell.GetSpellTexture(journalSpellID) or icon
     end
 
     return {
@@ -309,20 +311,9 @@ local function SetSecondaryShown(slot, shown)
     ProfessionSideTabsDB[secondaryProfessions[slot].key] = shown
 end
 
-local function GetProfessionSkillAction(skill)
-    if skill.spellID then
-        if C_SpellBook.IsSpellKnown(skill.spellID)
-            or (C_SpellBook.FindSpellBookSlotForSpell and C_SpellBook.FindSpellBookSlotForSpell(skill.spellID, false, false))
-        then
-            return skill.spellID
-        end
-    elseif C_TradeSkillUI.IsRecipeProfessionLearned then
-        for _, recipeID in ipairs(skill.recipeIDs) do
-            if C_TradeSkillUI.IsRecipeProfessionLearned(recipeID) then
-                return recipeID
-            end
-        end
-    end
+local function IsProfessionSkillLearned(spellID)
+    return C_SpellBook.IsSpellKnown(spellID)
+        or (C_SpellBook.FindSpellBookSlotForSpell and C_SpellBook.FindSpellBookSlotForSpell(spellID, false, false))
 end
 
 local function IsDeathKnight()
@@ -728,10 +719,8 @@ local function EnsurePanel(panel, refresh)
     ConfigureSpellTab(panel.buttons[RUNEFORGING_SLOT], RUNEFORGING_SPELL_ID, "Runeforging")
     for index, skill in ipairs(professionSkills) do
         local slot = professionSkillSlots[index]
-        local button = CreateTabButton(container, prefix .. "Tab" .. slot, OpenProfessionSkillRecipe)
-        if skill.spellID then
-            ConfigureSpellTab(button, skill.spellID, skill.name)
-        end
+        local button = CreateTabButton(container, prefix .. "Tab" .. slot)
+        ConfigureSpellTab(button, skill.spellID, skill.name)
         panel.buttons[slot] = button
     end
 
@@ -895,20 +884,19 @@ local function UpdateButtons()
     end
 
     for index, skill in ipairs(professionSkills) do
-        local actionID = GetProfessionSkillAction(skill)
+        local learned = IsProfessionSkillLearned(skill.spellID)
         local shown = ProfessionSideTabsDB.shownProfessionSkills[skill.key] == true
         local checkbox = professionSkillCheckboxes[index]
         if checkbox then
-            checkbox.label:SetText(skill.name .. (actionID and "" or " (Not learned)"))
-            checkbox:GetCheckedTexture():SetDesaturated(not actionID)
+            checkbox.label:SetText(skill.name .. (learned and "" or " (Not learned)"))
+            checkbox:GetCheckedTexture():SetDesaturated(not learned)
             checkbox:SetChecked(shown)
         end
-        if shown and actionID then
+        if shown and learned then
             professions[professionSkillSlots[index]] = {
-                name = C_Spell.GetSpellName(actionID) or skill.name,
-                icon = C_Spell.GetSpellTexture(actionID),
-                spellID = actionID,
-                recipeID = skill.recipeIDs and actionID or nil,
+                name = C_Spell.GetSpellName(skill.spellID) or skill.name,
+                icon = C_Spell.GetSpellTexture(skill.spellID),
+                spellID = skill.spellID,
             }
         end
     end
