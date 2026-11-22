@@ -26,6 +26,7 @@ end
 local BUTTON_SIZE = 48
 local BUTTON_GAP = 6
 local GROUP_SPACER = 14
+local ATT_VERTICAL_OFFSET = 80
 
 local function IsSecondaryShown(slot)
     EnsureDB()
@@ -249,7 +250,12 @@ local function EnsureUI()
 
     container = CreateFrame("Frame", addonName .. "Container", ProfessionsFrame)
     container:SetWidth(BUTTON_SIZE + 20)
-    container:SetPoint("TOPLEFT", ProfessionsFrame, "TOPRIGHT", -1, -74)
+
+    -- Leave room for the All The Things tab above the profession buttons.
+    local attEnabled = C_AddOns.DoesAddOnExist("AllTheThings")
+        and C_AddOns.GetAddOnEnableState("AllTheThings", UnitGUID("player")) > Enum.AddOnEnableState.None
+    local attOffset = attEnabled and ATT_VERTICAL_OFFSET or 0
+    container:SetPoint("TOPLEFT", ProfessionsFrame, "TOPRIGHT", -1, -74 - attOffset)
 
     container.bg = container:CreateTexture(nil, "BACKGROUND")
     container.bg:SetAllPoints()
