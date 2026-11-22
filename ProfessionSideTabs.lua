@@ -35,6 +35,9 @@ local tabStyles = {
 
 local DEFAULT_PANEL_POSITION = 0
 local MAX_PANEL_POSITION = 100
+local MIN_PANEL_SIZE = 75
+local DEFAULT_PANEL_SIZE = 100
+local MAX_PANEL_SIZE = 110
 local LEGACY_FRAME_HEIGHT = 658
 local LEGACY_SEPARATOR_DEPTH = 2 * (BUTTON_SIZE + BUTTON_GAP) + DIVIDER_TOP_GAP + DIVIDER_HEIGHT / 2
 local LEGACY_PANEL_HEIGHT = 5 * (BUTTON_SIZE + BUTTON_GAP) + GROUP_SPACER + PANEL_HEIGHT_PADDING
@@ -82,6 +85,12 @@ local function EnsureDB()
         end
     end
     ProfessionSideTabsDB.panelPosition = math.max(0, math.min(MAX_PANEL_POSITION, math.floor(position + 0.5)))
+
+    local panelSize = ProfessionSideTabsDB.panelSize
+    if type(panelSize) ~= "number" then
+        panelSize = DEFAULT_PANEL_SIZE
+    end
+    ProfessionSideTabsDB.panelSize = math.max(MIN_PANEL_SIZE, math.min(MAX_PANEL_SIZE, math.floor(panelSize + 0.5)))
 
     for _, profession in pairs(secondaryProfessions) do
         if ProfessionSideTabsDB[profession.key] == nil then
@@ -474,7 +483,8 @@ local function UpdateContainerPosition(panel)
     end
 
     local panelHeight = container:GetHeight()
-    local scale = math.min(1, availableHeight / panelHeight)
+    local requestedScale = ProfessionSideTabsDB.panelSize / 100
+    local scale = math.min(requestedScale, availableHeight / panelHeight)
     local travel = math.max(0, availableHeight - panelHeight * scale)
     local fraction = ProfessionSideTabsDB.panelPosition / MAX_PANEL_POSITION
     container:SetScale(scale)
@@ -681,7 +691,7 @@ end
 local function CreateStandaloneSettingsWindow(title)
     local window = CreateFrame("Frame", nil, UIParent, "ButtonFrameTemplate")
     window:Hide()
-    window:SetSize(420, 562)
+    window:SetSize(420, 610)
     window:SetPoint("CENTER", UIParent, "CENTER")
     window:SetFrameStrata("DIALOG")
     window:EnableMouse(true)
@@ -762,6 +772,24 @@ local function RegisterSettings()
         end)
     end
 
+    AddSectionHeading("Tab Style")
+    local styleDropdown = CreateFrame("DropdownButton", nil, page, "WowStyle1DropdownTemplate")
+    styleDropdown:SetPoint("TOPLEFT", 24, y)
+    styleDropdown:SetWidth(150)
+    styleDropdown:SetText(ProfessionSideTabsDB.tabStyle)
+    styleDropdown:SetupMenu(function(_, menu)
+        for _, styleName in ipairs({ "Panel", "Forever" }) do
+            menu:CreateRadio(styleName, function()
+                return ProfessionSideTabsDB.tabStyle == styleName
+            end, function()
+                ProfessionSideTabsDB.tabStyle = styleName
+                styleDropdown:SetText(styleName)
+                UpdateButtons()
+            end)
+        end
+    end)
+    y = y - 30
+
     AddSectionHeading("Additional Windows")
     for _, panel in ipairs(panels) do
         if panel.option then
@@ -783,52 +811,45 @@ local function RegisterSettings()
         AddProfessionCheckbox(slot)
     end
 
+    local dockedSliderWidth = 240
+    local function AddPanelSlider(setting, options)
+        local slider = CreateFrame("Frame", nil, page, "MinimalSliderWithSteppersTemplate")
+        slider:SetPoint("TOPLEFT", 24, y)
+        slider:SetSize(dockedSliderWidth, 20)
+        slider:Init(ProfessionSideTabsDB[setting], options.minValue, options.maxValue, options.steps, options.formatters)
+        slider:RegisterCallback("OnValueChanged", function(_, value)
+            ProfessionSideTabsDB[setting] = math.floor(value + 0.5)
+            for _, panel in ipairs(panels) do
+                UpdateContainerPosition(panel)
+            end
+        end, page)
+        return slider
+    end
+
     y = y - 8
     AddSectionHeading("Panel Position")
     AddText("Vertical Position", "GameFontHighlight")
-
-    local sliderOptions = Settings.CreateSliderOptions(0, MAX_PANEL_POSITION, 1)
-    sliderOptions:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Left, function()
+    y = y + 4
+    local positionOptions = Settings.CreateSliderOptions(0, MAX_PANEL_POSITION, 1)
+    positionOptions:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Left, function()
         return "Top"
     end)
-    sliderOptions:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Right, function()
+    positionOptions:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Right, function()
         return "Bottom"
     end)
-    local slider = CreateFrame("Frame", nil, page, "MinimalSliderWithSteppersTemplate")
-    local dockedSliderWidth = 240
-    slider:SetPoint("TOPLEFT", 24, y)
-    slider:SetSize(dockedSliderWidth, 20)
-    slider:Init(
-        ProfessionSideTabsDB.panelPosition,
-        sliderOptions.minValue,
-        sliderOptions.maxValue,
-        sliderOptions.steps,
-        sliderOptions.formatters
-    )
-    slider:RegisterCallback("OnValueChanged", function(_, value)
-        ProfessionSideTabsDB.panelPosition = math.floor(value + 0.5)
-        for _, panel in ipairs(panels) do
-            UpdateContainerPosition(panel)
-        end
-    end, page)
+    local positionSlider = AddPanelSlider("panelPosition", positionOptions)
 
     y = y - 28
-    AddSectionHeading("Tab Style")
-    local styleDropdown = CreateFrame("DropdownButton", nil, page, "WowStyle1DropdownTemplate")
-    styleDropdown:SetPoint("TOPLEFT", 24, y)
-    styleDropdown:SetWidth(150)
-    styleDropdown:SetText(ProfessionSideTabsDB.tabStyle)
-    styleDropdown:SetupMenu(function(_, menu)
-        for _, styleName in ipairs({ "Panel", "Forever" }) do
-            menu:CreateRadio(styleName, function()
-                return ProfessionSideTabsDB.tabStyle == styleName
-            end, function()
-                ProfessionSideTabsDB.tabStyle = styleName
-                styleDropdown:SetText(styleName)
-                UpdateButtons()
-            end)
-        end
+    AddText("Panel Size", "GameFontHighlight")
+    y = y + 4
+    local sizeOptions = Settings.CreateSliderOptions(MIN_PANEL_SIZE, MAX_PANEL_SIZE, 1)
+    sizeOptions:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Left, function()
+        return "Small"
     end)
+    sizeOptions:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Right, function()
+        return "Large"
+    end)
+    local sizeSlider = AddPanelSlider("panelSize", sizeOptions)
 
     function canvas:OnDefault()
         for _, profession in pairs(primaryProfessions) do
@@ -838,13 +859,15 @@ local function RegisterSettings()
             ProfessionSideTabsDB[profession.key] = profession.default
         end
         ProfessionSideTabsDB.panelPosition = DEFAULT_PANEL_POSITION
+        ProfessionSideTabsDB.panelSize = DEFAULT_PANEL_SIZE
         for _, panel in ipairs(panels) do
             if panel.option then
                 ProfessionSideTabsDB[panel.option] = true
             end
         end
         ProfessionSideTabsDB.tabStyle = "Panel"
-        slider:SetValue(DEFAULT_PANEL_POSITION)
+        positionSlider:SetValue(DEFAULT_PANEL_POSITION)
+        sizeSlider:SetValue(DEFAULT_PANEL_SIZE)
         styleDropdown:SetText("Panel")
         UpdateButtons()
     end
@@ -854,7 +877,8 @@ local function RegisterSettings()
         if standalone then
             standalone:Hide()
             DockSettingsPage()
-            slider:SetWidth(dockedSliderWidth)
+            positionSlider:SetWidth(dockedSliderWidth)
+            sizeSlider:SetWidth(dockedSliderWidth)
         end
     end)
 
@@ -878,7 +902,8 @@ local function RegisterSettings()
         page:ClearAllPoints()
         page:SetPoint("TOPLEFT", standalone, "TOPLEFT", 24, -20)
         page:SetPoint("BOTTOMRIGHT", standalone, "BOTTOMRIGHT", -24, 16)
-        slider:SetWidth(270)
+        positionSlider:SetWidth(270)
+        sizeSlider:SetWidth(270)
         standalone:Show()
     end
 
