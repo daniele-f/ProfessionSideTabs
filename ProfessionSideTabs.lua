@@ -270,6 +270,11 @@ local function RefreshSettingsCheckboxes()
             checkbox.label:SetAlpha(profession and 1 or 0.5)
             checkbox:SetChecked(IsPrimaryShown(profession))
         else
+            local label = "Show " .. secondaryProfessions[slot].name
+            if not select(slot, GetProfessions()) then
+                label = label .. " (Not learned)"
+            end
+            checkbox.label:SetText(label)
             checkbox:SetChecked(IsSecondaryShown(slot))
         end
     end
@@ -767,9 +772,7 @@ local function RegisterSettings()
     end
 
     local function AddProfessionCheckbox(slot)
-        local profession = secondaryProfessions[slot]
-        local label = profession and ("Show " .. profession.name) or ""
-        settingsCheckboxes[slot] = AddCheckbox(label, function(self)
+        settingsCheckboxes[slot] = AddCheckbox("", function(self)
             SetProfessionShown(slot, not not self:GetChecked())
             UpdateButtons()
         end)
