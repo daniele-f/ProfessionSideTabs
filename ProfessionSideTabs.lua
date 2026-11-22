@@ -1047,7 +1047,10 @@ end
 
 local function UpdatePanel(panel, professions, currentSkillLine, style)
     local container = panel.container
-    if not panel.frame:IsShown() or (panel.option and not ProfessionSideTabsDB[panel.option]) then
+    local hideRuneforgingTabs = panel == craftingPanel and not ProfessionSideTabsDB.showRuneforging
+        and (currentSkillLine == RUNEFORGING_SKILL_LINE
+            or (C_TradeSkillUI and C_TradeSkillUI.IsRuneforging and C_TradeSkillUI.IsRuneforging()))
+    if not panel.frame:IsShown() or hideRuneforgingTabs or (panel.option and not ProfessionSideTabsDB[panel.option]) then
         container:Hide()
         return
     end
