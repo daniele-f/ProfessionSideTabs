@@ -2,8 +2,27 @@ local addonName = ...
 local addon = CreateFrame("Frame")
 
 local container
+local positionAnchor
+local settingsCategory
 local buttons = {}
-local initialized = false
+local primaryProfessions = {}
+local settingsCheckboxes = {}
+
+local BUTTON_SIZE = 48
+local BUTTON_GAP = 6
+local GROUP_SPACER = 14
+local DIVIDER_HEIGHT = 8
+local DIVIDER_TOP_GAP = 4
+local PANEL_HEIGHT_PADDING = 10
+local TOP_INSET = 74
+local BOTTOM_INSET = 32
+local COMPATIBILITY_Y_OFFSET = 80
+
+local DEFAULT_PANEL_POSITION = 0
+local MAX_PANEL_POSITION = 100
+local LEGACY_FRAME_HEIGHT = 658
+local LEGACY_SEPARATOR_DEPTH = 2 * (BUTTON_SIZE + BUTTON_GAP) + DIVIDER_TOP_GAP + DIVIDER_HEIGHT / 2
+local LEGACY_PANEL_HEIGHT = 5 * (BUTTON_SIZE + BUTTON_GAP) + GROUP_SPACER + PANEL_HEIGHT_PADDING
 
 local secondaryProfessions = {
     [3] = { key = "showArchaeology", name = "Archaeology", default = false },
@@ -16,6 +35,30 @@ local function EnsureDB()
         ProfessionSideTabsDB = {}
     end
 
+    if type(ProfessionSideTabsDB.hiddenPrimaryProfessions) ~= "table" then
+        ProfessionSideTabsDB.hiddenPrimaryProfessions = {}
+    end
+
+    local position = ProfessionSideTabsDB.panelPosition
+    if type(position) ~= "number" then
+        -- Convert a saved coordinate using the fully expanded layout.
+        local oldSeparatorY = ProfessionSideTabsDB.panelSeparatorY
+        local oldBottomY = ProfessionSideTabsDB.panelBottomY
+        local oldTopY = ProfessionSideTabsDB.panelY
+        if type(oldSeparatorY) == "number" then
+            oldTopY = oldSeparatorY + LEGACY_SEPARATOR_DEPTH
+        elseif type(oldBottomY) == "number" then
+            oldTopY = oldBottomY + LEGACY_PANEL_HEIGHT
+        end
+
+        position = DEFAULT_PANEL_POSITION
+        if type(oldTopY) == "number" then
+            local travel = LEGACY_FRAME_HEIGHT - TOP_INSET - BOTTOM_INSET - LEGACY_PANEL_HEIGHT
+            position = (-oldTopY - TOP_INSET) / travel * MAX_PANEL_POSITION
+        end
+    end
+    ProfessionSideTabsDB.panelPosition = math.max(0, math.min(MAX_PANEL_POSITION, math.floor(position + 0.5)))
+
     for _, profession in pairs(secondaryProfessions) do
         if ProfessionSideTabsDB[profession.key] == nil then
             ProfessionSideTabsDB[profession.key] = profession.default
@@ -23,16 +66,8 @@ local function EnsureDB()
     end
 end
 
-local BUTTON_SIZE = 48
-local BUTTON_GAP = 6
-local GROUP_SPACER = 14
-local ATT_VERTICAL_OFFSET = 80
-
 local function IsSecondaryShown(slot)
-    EnsureDB()
-
-    local profession = secondaryProfessions[slot]
-    return not profession or ProfessionSideTabsDB[profession.key] ~= false
+    return ProfessionSideTabsDB[secondaryProfessions[slot].key] ~= false
 end
 
 local function OpenProfessionBySlot(slotNumber)
@@ -72,6 +107,45 @@ local function GetProfessionDataBySlot(slotNumber)
         skillLine = skillLine,
         skillModifier = skillModifier or 0,
     }
+end
+
+local function RefreshPrimaryProfessions()
+    for slot = 1, 2 do
+        primaryProfessions[slot] = GetProfessionDataBySlot(slot)
+    end
+end
+
+local function IsPrimaryShown(profession)
+    return profession ~= nil and not ProfessionSideTabsDB.hiddenPrimaryProfessions[profession.skillLine]
+end
+
+local function SetProfessionShown(slot, shown)
+    if slot <= 2 then
+        local profession = primaryProfessions[slot]
+        if profession then
+            ProfessionSideTabsDB.hiddenPrimaryProfessions[profession.skillLine] = not shown or nil
+        end
+    else
+        ProfessionSideTabsDB[secondaryProfessions[slot].key] = shown
+    end
+end
+
+local function RefreshSettingsCheckboxes()
+    for slot, checkbox in ipairs(settingsCheckboxes) do
+        if slot <= 2 then
+            local profession = primaryProfessions[slot]
+            if profession and profession.name then
+                checkbox.label:SetText("Show " .. profession.name)
+            else
+                checkbox.label:SetText("Primary Profession " .. slot .. " (unlearned)")
+            end
+            checkbox:SetEnabled(profession ~= nil)
+            checkbox.label:SetAlpha(profession and 1 or 0.5)
+            checkbox:SetChecked(IsPrimaryShown(profession))
+        else
+            checkbox:SetChecked(IsSecondaryShown(slot))
+        end
+    end
 end
 
 local function GetCurrentOpenSkillLine()
@@ -220,23 +294,41 @@ local function CreateTabButton(parent, index)
     return button
 end
 
+local function UpdateContainerPosition()
+    if not container or container:GetHeight() <= 0 then
+        return false
+    end
+
+    local compatibilityAddon = "AllTheThings"
+    local needsClearance = C_AddOns.DoesAddOnExist(compatibilityAddon)
+        and C_AddOns.GetAddOnEnableState(compatibilityAddon, UnitGUID("player")) > Enum.AddOnEnableState.None
+    local topInset = TOP_INSET + (needsClearance and COMPATIBILITY_Y_OFFSET or 0)
+    local availableHeight = ProfessionsFrame:GetHeight() - topInset - BOTTOM_INSET
+    if availableHeight <= 0 then
+        return false
+    end
+
+    local panelHeight = container:GetHeight()
+    local scale = math.min(1, availableHeight / panelHeight)
+    local travel = math.max(0, availableHeight - panelHeight * scale)
+    local fraction = ProfessionSideTabsDB.panelPosition / MAX_PANEL_POSITION
+    container:SetScale(scale)
+    positionAnchor:ClearAllPoints()
+    positionAnchor:SetPoint("TOPLEFT", ProfessionsFrame, "TOPRIGHT", -1, -topInset - travel * fraction)
+    return true
+end
+
 local function EnsureUI()
-    if initialized then
+    if container or not ProfessionsFrame then
         return
     end
 
-    if not ProfessionsFrame then
-        return
-    end
-
+    -- Keep the horizontal anchor at the window's scale if the buttons need to shrink.
+    positionAnchor = CreateFrame("Frame", nil, ProfessionsFrame)
+    positionAnchor:SetSize(1, 1)
     container = CreateFrame("Frame", addonName .. "Container", ProfessionsFrame)
+    container:SetPoint("TOPLEFT", positionAnchor, "TOPLEFT", 0, 0)
     container:SetWidth(BUTTON_SIZE + 20)
-
-    -- Leave room for the All The Things tab above the profession buttons.
-    local attEnabled = C_AddOns.DoesAddOnExist("AllTheThings")
-        and C_AddOns.GetAddOnEnableState("AllTheThings", UnitGUID("player")) > Enum.AddOnEnableState.None
-    local attOffset = attEnabled and ATT_VERTICAL_OFFSET or 0
-    container:SetPoint("TOPLEFT", ProfessionsFrame, "TOPRIGHT", -1, -74 - attOffset)
 
     container.bg = container:CreateTexture(nil, "BACKGROUND")
     container.bg:SetAllPoints()
@@ -261,7 +353,7 @@ local function EnsureUI()
     container.bottom:SetColorTexture(0.6, 0.6, 0.6, 0.8)
 
     container.divider = container:CreateTexture(nil, "ARTWORK")
-    container.divider:SetHeight(8)
+    container.divider:SetHeight(DIVIDER_HEIGHT)
     container.divider:SetTexture("Interface\\Common\\UI-TooltipDivider-Transparent")
     container.divider:SetAlpha(0.9)
     container.divider:Hide()
@@ -271,117 +363,86 @@ local function EnsureUI()
     for i = 1, 5 do
         buttons[i] = CreateTabButton(container, i)
     end
+end
 
-    initialized = true
+local function LayoutButtonGroup(firstSlot, lastSlot, y)
+    for slot = firstSlot, lastSlot do
+        local button = buttons[slot]
+        if button:IsShown() then
+            button:ClearAllPoints()
+            button:SetPoint("TOPLEFT", container, "TOPLEFT", 9, -7 - y)
+            y = y + BUTTON_SIZE + BUTTON_GAP
+        end
+    end
+    return y
 end
 
 local function LayoutButtons()
+    local primaryEnd = LayoutButtonGroup(1, 2, 0)
+    local hasPrimary = primaryEnd > 0
+    local dividerTop = primaryEnd + DIVIDER_TOP_GAP
+    local secondaryStart = primaryEnd + (hasPrimary and GROUP_SPACER or 0)
+    local secondaryEnd = LayoutButtonGroup(3, 5, secondaryStart)
+    local hasSecondary = secondaryEnd > secondaryStart
+
+    local divider = container.divider
+    if hasPrimary and hasSecondary then
+        divider:ClearAllPoints()
+        divider:SetPoint("TOPLEFT", container, "TOPLEFT", 8, -dividerTop)
+        divider:SetPoint("TOPRIGHT", container, "TOPRIGHT", -16, -dividerTop)
+        divider:Show()
+    else
+        divider:Hide()
+    end
+
+    local contentHeight = hasSecondary and secondaryEnd or primaryEnd
+    container:SetHeight(math.max(contentHeight + PANEL_HEIGHT_PADDING, BUTTON_SIZE))
+    return UpdateContainerPosition()
+end
+
+local function UpdateButtons()
+    EnsureDB()
+    RefreshPrimaryProfessions()
+    RefreshSettingsCheckboxes()
+    EnsureUI()
     if not container then
         return
     end
 
-    container.divider:Hide()
-
-    local y = 0
-    local anyPrimaryShown = false
-    local anySecondaryShown = false
-    local lastVisiblePrimarySlot = nil
-
-    for slot = 1, 2 do
-        if buttons[slot] and buttons[slot]:IsShown() then
-            anyPrimaryShown = true
-            lastVisiblePrimarySlot = slot
-        end
-    end
-
-    for slot = 3, 5 do
-        if buttons[slot] and buttons[slot]:IsShown() then
-            anySecondaryShown = true
-            break
-        end
-    end
-
-    for slot = 1, 5 do
-        local button = buttons[slot]
-        if button and button:IsShown() then
-            button:ClearAllPoints()
-            button:SetPoint("TOPLEFT", container, "TOPLEFT", 9, -7 - y)
-            y = y + BUTTON_SIZE + BUTTON_GAP
-
-            if slot == lastVisiblePrimarySlot and anyPrimaryShown and anySecondaryShown then
-                container.divider:Show()
-                container.divider:ClearAllPoints()
-                container.divider:SetPoint("TOPLEFT", container, "TOPLEFT", 8, -y - 4)
-                container.divider:SetPoint("TOPRIGHT", container, "TOPRIGHT", -16, -y - 4)
-
-                y = y + GROUP_SPACER
-            end
-        end
-    end
-
-    container:SetHeight(math.max(y + 10, BUTTON_SIZE))
-end
-
-local function UpdateButtons()
-    EnsureUI()
-    if not initialized then
-        return
-    end
-
     local currentSkillLine = GetCurrentOpenSkillLine()
-    local visibleSlots = {}
-
-    for slot = 1, 5 do
-        if slot < 3 or IsSecondaryShown(slot) then
-            local data = GetProfessionDataBySlot(slot)
-            if data then
-                visibleSlots[#visibleSlots + 1] = slot
-            end
-        end
-    end
-
-    local shouldShowAnyButtons = #visibleSlots > 1
+    local anyButtonShown = false
 
     for slot = 1, 5 do
         local button = buttons[slot]
+        local data
+        if slot <= 2 then
+            local profession = primaryProfessions[slot]
+            if IsPrimaryShown(profession) then
+                data = profession
+            end
+        elseif IsSecondaryShown(slot) then
+            data = GetProfessionDataBySlot(slot)
+        end
 
-        if not shouldShowAnyButtons then
+        if data then
+            button.slotNumber = slot
+            button.professionData = data
+            button.icon:SetTexture(data.icon or 134400)
+            button:Show()
+            UpdateButtonState(button, currentSkillLine and currentSkillLine == data.skillLine)
+            anyButtonShown = true
+        else
             button.slotNumber = nil
             button.professionData = nil
             button:Hide()
             button.hoverGlow:Hide()
             button.selectedGlow:Hide()
-        else
-            if slot >= 3 and not IsSecondaryShown(slot) then
-                button.slotNumber = nil
-                button.professionData = nil
-                button:Hide()
-                button.hoverGlow:Hide()
-                button.selectedGlow:Hide()
-            else
-                local data = GetProfessionDataBySlot(slot)
-
-                if data then
-                    button.slotNumber = slot
-                    button.professionData = data
-                    button.icon:SetTexture(data.icon or 134400)
-                    button:Show()
-
-                    UpdateButtonState(button, currentSkillLine and currentSkillLine == data.skillLine)
-                else
-                    button.slotNumber = nil
-                    button.professionData = nil
-                    button:Hide()
-                    button.hoverGlow:Hide()
-                    button.selectedGlow:Hide()
-                end
-            end
         end
     end
 
-    LayoutButtons()
+    local fits = LayoutButtons()
 
-    if ProfessionsFrame and ProfessionsFrame:IsShown() and shouldShowAnyButtons then
+    if ProfessionsFrame:IsShown() and anyButtonShown and fits then
         container:Show()
     else
         container:Hide()
@@ -389,29 +450,90 @@ local function UpdateButtons()
 end
 
 local function RegisterSettings()
-    local category = Settings.RegisterVerticalLayoutCategory("Profession Side Tabs")
+    -- Keep the controls out of the shared setting lookup used by action-bar mouse clicks.
+    local page = CreateFrame("Frame", nil, UIParent)
+    page:Hide()
+    local y = -20
 
-    for slot = 3, 5 do
-        local profession = secondaryProfessions[slot]
-        local setting = Settings.RegisterAddOnSetting(
-            category,
-            addonName .. "_" .. profession.key,
-            profession.key,
-            ProfessionSideTabsDB,
-            Settings.VarType.Boolean,
-            "Show " .. profession.name,
-            profession.default
-        )
-        profession.setting = setting
-        setting:SetValueChangedCallback(UpdateButtons)
-        Settings.CreateCheckbox(category, setting, "Show the " .. profession.name .. " side tab when learned.")
+    local function AddText(text, font)
+        local label = page:CreateFontString(nil, "ARTWORK", font)
+        label:SetPoint("TOPLEFT", 24, y)
+        label:SetText(text)
+        y = y - 24
     end
 
-    Settings.RegisterAddOnCategory(category)
-end
+    local function AddProfessionCheckbox(slot)
+        local checkbox = CreateFrame("CheckButton", nil, page, "UICheckButtonTemplate")
+        checkbox:SetPoint("TOPLEFT", 24, y)
+        checkbox:SetSize(26, 26)
+        checkbox.label = checkbox:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+        checkbox.label:SetPoint("LEFT", checkbox, "RIGHT", 4, 0)
+        settingsCheckboxes[slot] = checkbox
+        if slot >= 3 then
+            checkbox.label:SetText("Show " .. secondaryProfessions[slot].name)
+        end
+        checkbox:SetScript("OnClick", function(self)
+            SetProfessionShown(slot, not not self:GetChecked())
+            UpdateButtons()
+        end)
+        y = y - 30
+    end
 
-local function OnProfessionWindowShown()
-    UpdateButtons()
+    AddText("Profession Side Tabs", "GameFontNormalLarge")
+    y = y - 12
+    AddText("Primary Professions", "GameFontNormal")
+    for slot = 1, 2 do
+        AddProfessionCheckbox(slot)
+    end
+
+    y = y - 8
+    AddText("Secondary Professions", "GameFontNormal")
+    for slot = 3, 5 do
+        AddProfessionCheckbox(slot)
+    end
+
+    y = y - 8
+    AddText("Panel Position", "GameFontNormal")
+    AddText("Vertical Position", "GameFontHighlight")
+
+    local sliderOptions = Settings.CreateSliderOptions(0, MAX_PANEL_POSITION, 1)
+    sliderOptions:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Left, function()
+        return "Top"
+    end)
+    sliderOptions:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Right, function()
+        return "Bottom"
+    end)
+    local slider = CreateFrame("Frame", nil, page, "MinimalSliderWithSteppersTemplate")
+    slider:SetPoint("TOPLEFT", 24, y)
+    slider:SetSize(240, 20)
+    slider:Init(
+        ProfessionSideTabsDB.panelPosition,
+        sliderOptions.minValue,
+        sliderOptions.maxValue,
+        sliderOptions.steps,
+        sliderOptions.formatters
+    )
+    slider:RegisterCallback("OnValueChanged", function(_, value)
+        ProfessionSideTabsDB.panelPosition = math.floor(value + 0.5)
+        UpdateContainerPosition()
+    end, page)
+
+    function page:OnDefault()
+        for _, profession in pairs(primaryProfessions) do
+            ProfessionSideTabsDB.hiddenPrimaryProfessions[profession.skillLine] = nil
+        end
+        for _, profession in pairs(secondaryProfessions) do
+            ProfessionSideTabsDB[profession.key] = profession.default
+        end
+        ProfessionSideTabsDB.panelPosition = DEFAULT_PANEL_POSITION
+        slider:SetValue(DEFAULT_PANEL_POSITION)
+        UpdateButtons()
+    end
+
+    RefreshSettingsCheckboxes()
+    local category = Settings.RegisterCanvasLayoutCategory(page, "Profession Side Tabs")
+    Settings.RegisterAddOnCategory(category)
+    settingsCategory = category
 end
 
 local function OnProfessionWindowHidden()
@@ -428,8 +550,9 @@ local function TryHookProfessionFrame()
     EnsureUI()
 
     if not ProfessionsFrame.__ProfessionSideTabsHooked then
-        ProfessionsFrame:HookScript("OnShow", OnProfessionWindowShown)
+        ProfessionsFrame:HookScript("OnShow", UpdateButtons)
         ProfessionsFrame:HookScript("OnHide", OnProfessionWindowHidden)
+        ProfessionsFrame:HookScript("OnSizeChanged", UpdateButtons)
         ProfessionsFrame.__ProfessionSideTabsHooked = true
     end
 end
@@ -437,6 +560,7 @@ end
 addon:SetScript("OnEvent", function(self, event)
     if event == "PLAYER_LOGIN" then
         EnsureDB()
+        RefreshPrimaryProfessions()
         RegisterSettings()
         TryHookProfessionFrame()
         return
@@ -444,7 +568,7 @@ addon:SetScript("OnEvent", function(self, event)
 
     if event == "TRADE_SKILL_SHOW" then
         TryHookProfessionFrame()
-        OnProfessionWindowShown()
+        UpdateButtons()
         return
     end
 
@@ -476,46 +600,57 @@ addon:RegisterEvent("TRADE_SKILL_NAME_UPDATE")
 SLASH_PROFESSIONSIDETABS1 = "/pst"
 
 SlashCmdList["PROFESSIONSIDETABS"] = function(msg)
-    EnsureDB()
-
     msg = (msg or ""):lower():match("^%s*(.-)%s*$")
 
-    local cmd, arg = msg:match("^(%S+)%s*(%S*)$")
+    if msg == "" and settingsCategory then
+        C_Timer.After(0, function()
+            if InCombatLockdown() then
+                print("|cff00ff98PST|r: Settings can be opened after combat.")
+                return
+            end
 
-    local function Apply(profession)
-        local name = profession.name
-        if arg == "hide" then
-            profession.setting:SetValue(false)
-            print("|cff00ff98PST|r: " .. name .. " hidden")
-        elseif arg == "show" then
-            profession.setting:SetValue(true)
-            print("|cff00ff98PST|r: " .. name .. " shown")
-        else
-            print("|cff00ff98PST|r usage: /pst " .. name:lower() .. " show/hide")
-        end
+            Settings.OpenToCategory(settingsCategory:GetID())
+        end)
+        return
     end
 
-    if cmd == "archy" or cmd == "archaeology" then
-        Apply(secondaryProfessions[3])
-        return
-    elseif cmd == "fishing" then
-        Apply(secondaryProfessions[4])
-        return
-    elseif cmd == "cooking" then
-        Apply(secondaryProfessions[5])
-        return
-    elseif cmd == "secondary" then
-        if arg ~= "show" and arg ~= "hide" then
+    EnsureDB()
+
+    local cmd, arg = msg:match("^(%S+)%s*(%S*)$")
+    if cmd == "archy" then
+        cmd = "archaeology"
+    end
+
+    local validAction = arg == "show" or arg == "hide"
+    local shown = arg == "show"
+    local status = shown and "shown" or "hidden"
+
+    if cmd == "secondary" then
+        if not validAction then
             print("|cff00ff98PST|r usage: /pst secondary show/hide")
             return
         end
 
-        local shown = arg == "show"
         for slot = 3, 5 do
-            secondaryProfessions[slot].setting:SetValue(shown)
+            SetProfessionShown(slot, shown)
         end
-        print("|cff00ff98PST|r: All secondary professions " .. (shown and "shown" or "hidden"))
+        UpdateButtons()
+        print("|cff00ff98PST|r: All secondary professions " .. status)
         return
+    end
+
+    for slot, profession in pairs(secondaryProfessions) do
+        if cmd == profession.name:lower() then
+            if not validAction then
+                print("|cff00ff98PST|r usage: /pst " .. cmd .. " show/hide")
+                return
+            end
+
+            SetProfessionShown(slot, shown)
+            print("|cff00ff98PST|r: " .. profession.name .. " " .. status)
+            UpdateButtons()
+            return
+        end
     end
 
     print("|cff00ff98PST|r commands:")
