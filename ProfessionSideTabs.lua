@@ -14,6 +14,9 @@ local skillPlacementCheckbox, skillHoverCheckbox
 
 local BUTTON_SIZE = 48
 local ATTACHED_SKILL_SIZE = 38
+local SKILL_ANIMATION_DURATION = 0.14
+local SKILL_BORDER_FADE_DURATION = 0.06
+local SKILL_SLIDE_DISTANCE = 8
 local PANEL_BG_R, PANEL_BG_G, PANEL_BG_B = 0.14, 0.12, 0.10
 local BUTTON_GAP = 6
 local GROUP_SPACER = 14
@@ -467,6 +470,16 @@ local function CreatePanelTrim(frame)
     return trim
 end
 
+local function SetSkillBorderAlpha(skill, alpha)
+    skill.skillBorderAlpha = alpha
+    skill.hoverGlow:SetAlpha(0.55 * alpha)
+    if skill.panelTrim then
+        for _, edge in pairs(skill.panelTrim) do
+            edge:SetAlpha(alpha)
+        end
+    end
+end
+
 local function ApplyButtonStyle(button, style, attachedSkill)
     local isForever = style == tabStyles.Forever
     local compact = attachedSkill == true
@@ -503,6 +516,7 @@ local function ApplyButtonStyle(button, style, attachedSkill)
     end
     button.border:SetShown(not isForever and not panelExtension)
     button.leftFlair:SetShown(not isForever and not panelExtension)
+    SetSkillBorderAlpha(button, panelExtension and (button.fadeTarget and 0 or button.skillBorderAlpha or 1) or 1)
     if not styleChanged then
         PositionButtonIcon(button, false)
         return
@@ -541,6 +555,35 @@ local function ApplyButtonStyle(button, style, attachedSkill)
         button.selectedGlow:SetAlpha(0.85)
     end
     PositionButtonIcon(button, false)
+end
+
+local function GetAttachedSkillSlide(skill)
+    return (1 - skill:GetAlpha()) * SKILL_SLIDE_DISTANCE
+end
+
+local function PositionAttachedSkill(skill)
+    skill:ClearAllPoints()
+    skill:SetPoint("LEFT", skill.skillOwner, "RIGHT", skill.attachedOffset - GetAttachedSkillSlide(skill), 0)
+end
+
+local function AnimateAttachedSkill(skill, shown)
+    if not skill:IsShown() then
+        if not shown then
+            return
+        end
+        skill:SetAlpha(0)
+        PositionAttachedSkill(skill)
+        skill:Show()
+    end
+    local target = shown and 1 or 0
+    if skill:GetAlpha() ~= target then
+        if skill.tabStyle == tabStyles.Panel then
+            SetSkillBorderAlpha(skill, 0)
+        end
+        skill.fadeTarget = target
+    else
+        skill.fadeTarget = nil
+    end
 end
 
 local function CreateTabButton(parent, name, onClick)
@@ -606,8 +649,9 @@ local function CreateTabButton(parent, name, onClick)
 
     button:SetScript("OnEnter", function(self)
         self.mouseOver = true
-        if self.attachedSkill then
-            self.attachedSkill:Show()
+        local skill = self.attachedSkill or (self.skillOwner and self)
+        if skill then
+            AnimateAttachedSkill(skill, true)
         end
         self.hoverGlow:Show()
         UpdateButtonTooltip(self)
@@ -625,7 +669,7 @@ local function CreateTabButton(parent, name, onClick)
                 if owner.attachedSkill == skill and ProfessionSideTabsDB.skillsOnlyOnHover
                     and not owner.mouseOver and not skill.mouseOver
                 then
-                    skill:Hide()
+                    AnimateAttachedSkill(skill, false)
                 end
             end)
         end
@@ -685,7 +729,7 @@ local function SyncSpellAction(tab)
     end
     if tab.compactSkill then
         -- Only the exposed part of the attached skill receives clicks.
-        local overlap = tab.tabStyle.skillOverlap
+        local overlap = tab.tabStyle.skillOverlap + GetAttachedSkillSlide(tab)
         left = left + overlap
         width = width - overlap
     end
@@ -712,13 +756,42 @@ local function SyncSpellAction(tab)
     end
 end
 
+local function UpdateSpellTab(tab, elapsed)
+    local target = tab.fadeTarget
+    if target then
+        local step = elapsed / SKILL_ANIMATION_DURATION
+        local alpha = tab:GetAlpha()
+        if target == 1 then
+            alpha = math.min(target, alpha + step)
+        else
+            alpha = math.max(target, alpha - step)
+        end
+        tab:SetAlpha(alpha)
+        PositionAttachedSkill(tab)
+        if alpha == target then
+            tab.fadeTarget = nil
+            if target == 0 then
+                tab:Hide()
+                return
+            end
+        end
+    elseif tab.skillOwner and tab.tabStyle == tabStyles.Panel and tab.skillBorderAlpha and tab.skillBorderAlpha < 1 then
+        SetSkillBorderAlpha(tab, math.min(1, tab.skillBorderAlpha + elapsed / SKILL_BORDER_FADE_DURATION))
+    end
+
+    SyncSpellAction(tab)
+end
+
 local function ConfigureSpellTab(tab, spellID, spellName)
     tab.spellID = spellID
     tab.spellName = spellName
     tab:EnableMouse(false)
     tab:SetScript("OnClick", nil)
-    tab:SetScript("OnUpdate", SyncSpellAction)
+    tab:SetScript("OnUpdate", UpdateSpellTab)
     tab:HookScript("OnHide", function(self)
+        self.fadeTarget = nil
+        self:SetAlpha(1)
+        SetSkillBorderAlpha(self, 1)
         local action = self.spellAction
         if action then
             -- Finish a spell click if PreClick just closed the source window.
@@ -861,6 +934,7 @@ local function LayoutAttachedSkills(panel)
     local hoverOnly = ProfessionSideTabsDB.skillsOnlyOnHover
     for index, skill in ipairs(professionSkills) do
         local tab = panel.buttons[RUNEFORGING_SLOT + index]
+        local previousOwner = tab.skillOwner
         tab.skillOwner = nil
         if beside then
             local owner = skill.professionSlot and panel.buttons[skill.professionSlot]
@@ -876,14 +950,17 @@ local function LayoutAttachedSkills(panel)
             if tab.professionData and owner and owner:IsShown() then
                 owner.attachedSkill = tab
                 tab.skillOwner = owner
-                tab:ClearAllPoints()
                 local style = tab.tabStyle
                 local panelInset = style == tabStyles.Panel and (panel.container:GetWidth() - style.left - style.width) or 0
-                tab:SetPoint("LEFT", owner, "RIGHT", panelInset - style.skillOverlap, 0)
-                tab:SetShown(not hoverOnly or owner.mouseOver or tab.mouseOver or false)
+                tab.attachedOffset = panelInset - style.skillOverlap
+                PositionAttachedSkill(tab)
+                AnimateAttachedSkill(tab, not hoverOnly or owner.mouseOver or tab.mouseOver)
             else
                 tab:Hide()
             end
+        elseif previousOwner then
+            tab.fadeTarget = nil
+            tab:SetAlpha(1)
         end
     end
 end
