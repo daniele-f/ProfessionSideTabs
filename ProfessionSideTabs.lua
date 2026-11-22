@@ -10,6 +10,7 @@ local primaryCheckboxes = {}
 local secondaryCheckboxes = {}
 local runeforgingCheckbox
 local professionSkillCheckboxes = {}
+local skillPlacementCheckbox, skillHoverCheckbox
 
 local BUTTON_SIZE = 48
 local BUTTON_GAP = 6
@@ -78,17 +79,18 @@ local secondaryProfessions = {
 }
 
 local professionSkills = {
-    { key = "disenchant", name = "Disenchant", spellID = 13262 },
-    { key = "skinning", name = "Skinning", spellID = 8613 },
-    { key = "cookingFire", name = "Cooking Fire", spellID = 818 },
-    { key = "fishing", name = "Fishing", spellID = 131474 },
-    { key = "survey", name = "Survey", spellID = 80451 },
-    { key = "herbGathering", name = "Herb Gathering", spellID = 2366 },
+    { key = "disenchant", name = "Disenchant", spellID = 13262, professionID = 333 },
+    { key = "herbGathering", name = "Herb Gathering", spellID = 2366, professionID = 182 },
+    { key = "skinning", name = "Skinning", spellID = 8613, professionID = 393 },
+    { key = "cookingFire", name = "Cooking Fire", spellID = 818, professionSlot = 5 },
+    { key = "fishing", name = "Fishing", spellID = 131474, professionSlot = 4 },
+    { key = "survey", name = "Survey", spellID = 80451, professionSlot = 3 },
 }
-local professionSkillSlots = {}
+local primarySkillSlots, secondarySkillSlots = {}, {}
 local lastTabSlot = RUNEFORGING_SLOT + #professionSkills
 for index = 1, #professionSkills do
-    professionSkillSlots[index] = RUNEFORGING_SLOT + index
+    local slots = index <= 3 and primarySkillSlots or secondarySkillSlots
+    slots[#slots + 1] = RUNEFORGING_SLOT + index
 end
 
 local function EnsureDB()
@@ -103,6 +105,9 @@ local function EnsureDB()
     if type(ProfessionSideTabsDB.shownProfessionSkills) ~= "table" then
         ProfessionSideTabsDB.shownProfessionSkills = {}
     end
+
+    ProfessionSideTabsDB.skillsBesideProfessions = ProfessionSideTabsDB.skillsBesideProfessions ~= false
+    ProfessionSideTabsDB.skillsOnlyOnHover = ProfessionSideTabsDB.skillsOnlyOnHover ~= false
 
     if not tabStyles[ProfessionSideTabsDB.tabStyle] then
         ProfessionSideTabsDB.tabStyle = DEFAULT_TAB_STYLE
@@ -321,6 +326,14 @@ local function IsDeathKnight()
 end
 
 local function RefreshSettingsCheckboxes()
+    if skillPlacementCheckbox then
+        local beside = ProfessionSideTabsDB.skillsBesideProfessions == true
+        skillPlacementCheckbox:SetChecked(beside)
+        skillHoverCheckbox:SetEnabled(beside)
+        skillHoverCheckbox.label:SetAlpha(beside and 1 or 0.5)
+        skillHoverCheckbox:SetChecked(ProfessionSideTabsDB.skillsOnlyOnHover == true)
+    end
+
     if runeforgingCheckbox then
         local isDeathKnight = IsDeathKnight()
         local label = "Show Runeforging"
@@ -362,7 +375,7 @@ local function UpdateButtonTooltip(self)
     end
 
     GameTooltip:SetOwner(self, "ANCHOR_NONE")
-    GameTooltip:SetPoint("LEFT", self, "RIGHT", 12, 0)
+    GameTooltip:SetPoint("LEFT", self.attachedSkill or self, "RIGHT", 12, 0)
     local spellID = self.professionData.spellID
     if spellID and GameTooltip:SetSpellByID(spellID) then
         GameTooltip:Show()
@@ -536,13 +549,34 @@ local function CreateTabButton(parent, name, onClick)
     end)
 
     button:SetScript("OnEnter", function(self)
+        self.mouseOver = true
+        if self.attachedSkill then
+            self.attachedSkill:Show()
+        end
         self.hoverGlow:Show()
         UpdateButtonTooltip(self)
     end)
 
     button:SetScript("OnLeave", function(self)
+        self.mouseOver = nil
         self.hoverGlow:Hide()
         GameTooltip_Hide()
+
+        local owner = self.skillOwner or self
+        local skill = owner.attachedSkill
+        if skill and ProfessionSideTabsDB.skillsOnlyOnHover then
+            C_Timer.After(0.2, function()
+                if owner.attachedSkill == skill and ProfessionSideTabsDB.skillsOnlyOnHover
+                    and not owner.mouseOver and not skill.mouseOver
+                then
+                    skill:Hide()
+                end
+            end)
+        end
+    end)
+
+    button:SetScript("OnHide", function(self)
+        self.mouseOver = nil
     end)
 
     button:SetScript("OnMouseDown", function(self)
@@ -622,7 +656,7 @@ local function ConfigureSpellTab(tab, spellID, spellName)
     tab:EnableMouse(false)
     tab:SetScript("OnClick", nil)
     tab:SetScript("OnUpdate", SyncSpellAction)
-    tab:SetScript("OnHide", function(self)
+    tab:HookScript("OnHide", function(self)
         local action = self.spellAction
         if action then
             -- Finish a spell click if PreClick just closed the source window.
@@ -708,6 +742,7 @@ local function EnsurePanel(panel, refresh)
 
     container.divider = CreateDivider(container)
     container.professionSkillsDivider = CreateDivider(container)
+    container.secondarySkillsDivider = CreateDivider(container)
     container.runeforgingDivider = CreateDivider(container)
 
     container:Hide()
@@ -718,7 +753,7 @@ local function EnsurePanel(panel, refresh)
 
     ConfigureSpellTab(panel.buttons[RUNEFORGING_SLOT], RUNEFORGING_SPELL_ID, "Runeforging")
     for index, skill in ipairs(professionSkills) do
-        local slot = professionSkillSlots[index]
+        local slot = RUNEFORGING_SLOT + index
         local button = CreateTabButton(container, prefix .. "Tab" .. slot)
         ConfigureSpellTab(button, skill.spellID, skill.name)
         panel.buttons[slot] = button
@@ -770,6 +805,40 @@ local function PositionDivider(divider, container, groupEnd, shown)
     divider:SetShown(shown)
 end
 
+local function LayoutAttachedSkills(panel, style)
+    for slot = 1, 5 do
+        panel.buttons[slot].attachedSkill = nil
+    end
+
+    local beside = ProfessionSideTabsDB.skillsBesideProfessions
+    local hoverOnly = ProfessionSideTabsDB.skillsOnlyOnHover
+    for index, skill in ipairs(professionSkills) do
+        local tab = panel.buttons[RUNEFORGING_SLOT + index]
+        tab.skillOwner = nil
+        if beside then
+            local owner = skill.professionSlot and panel.buttons[skill.professionSlot]
+            if not owner then
+                for _, slot in ipairs(primaryProfessionSlots) do
+                    local primary = panel.buttons[slot]
+                    if primary.professionData and primary.professionData.skillLine == skill.professionID then
+                        owner = primary
+                        break
+                    end
+                end
+            end
+            if tab.professionData and owner and owner:IsShown() then
+                owner.attachedSkill = tab
+                tab.skillOwner = owner
+                tab:ClearAllPoints()
+                tab:SetPoint("TOPLEFT", owner, "TOPRIGHT", style == tabStyles.Panel and 12 or 4, 0)
+                tab:SetShown(not hoverOnly or owner.mouseOver or tab.mouseOver or false)
+            else
+                tab:Hide()
+            end
+        end
+    end
+end
+
 local function LayoutButtons(panel, style)
     local container = panel.container
     local isPanel = style == tabStyles.Panel
@@ -790,13 +859,26 @@ local function LayoutButtons(panel, style)
     local hasSecondary = secondaryEnd > secondaryStart
 
     local contentHeight = hasSecondary and secondaryEnd or primaryEnd
-    local skillsStart = contentHeight + (contentHeight > 0 and style.groupGap or 0)
-    local skillsEnd = LayoutButtonGroup(panel, professionSkillSlots, skillsStart, style)
-    local hasSkills = skillsEnd > skillsStart
-    PositionDivider(container.professionSkillsDivider, container, contentHeight,
-        isPanel and hasSkills and contentHeight > 0)
-    if hasSkills then
-        contentHeight = skillsEnd
+    LayoutAttachedSkills(panel, style)
+    if ProfessionSideTabsDB.skillsBesideProfessions then
+        container.professionSkillsDivider:Hide()
+        container.secondarySkillsDivider:Hide()
+    else
+        local skillsStart = contentHeight + (contentHeight > 0 and style.groupGap or 0)
+        local primarySkillsEnd = LayoutButtonGroup(panel, primarySkillSlots, skillsStart, style)
+        local hasPrimarySkills = primarySkillsEnd > skillsStart
+        local secondarySkillsStart = hasPrimarySkills and (primarySkillsEnd + style.groupGap) or skillsStart
+        local secondarySkillsEnd = LayoutButtonGroup(panel, secondarySkillSlots, secondarySkillsStart, style)
+        local hasSecondarySkills = secondarySkillsEnd > secondarySkillsStart
+        PositionDivider(container.professionSkillsDivider, container, contentHeight,
+            isPanel and (hasPrimarySkills or hasSecondarySkills) and contentHeight > 0)
+        PositionDivider(container.secondarySkillsDivider, container, primarySkillsEnd,
+            isPanel and hasPrimarySkills and hasSecondarySkills)
+        if hasSecondarySkills then
+            contentHeight = secondarySkillsEnd
+        elseif hasPrimarySkills then
+            contentHeight = primarySkillsEnd
+        end
     end
 
     local runeforging = panel.buttons[RUNEFORGING_SLOT]
@@ -839,11 +921,13 @@ local function UpdatePanel(panel, professions, currentSkillLine, style)
             button.slotNumber = slot
             button.professionData = data
             button.icon:SetTexture(data.icon or 134400)
-            button:Show()
+            if not ProfessionSideTabsDB.skillsBesideProfessions or slot <= RUNEFORGING_SLOT then
+                button:Show()
+                anyButtonShown = true
+            end
             local isSelected = (panel == craftingPanel and data.skillLine ~= nil and currentSkillLine == data.skillLine)
                 or (panel == archaeologyPanel and slot == 3)
             UpdateButtonState(button, isSelected)
-            anyButtonShown = true
         else
             button.slotNumber = nil
             button.professionData = nil
@@ -885,7 +969,7 @@ local function UpdateButtons()
 
     for index, skill in ipairs(professionSkills) do
         local learned = IsProfessionSkillLearned(skill.spellID)
-        local shown = ProfessionSideTabsDB.shownProfessionSkills[skill.key] == true
+        local shown = ProfessionSideTabsDB.shownProfessionSkills[skill.key] ~= false
         local checkbox = professionSkillCheckboxes[index]
         if checkbox then
             checkbox.label:SetText(skill.name .. (learned and "" or " (Not learned)"))
@@ -893,7 +977,7 @@ local function UpdateButtons()
             checkbox:SetChecked(shown)
         end
         if shown and learned then
-            professions[professionSkillSlots[index]] = {
+            professions[RUNEFORGING_SLOT + index] = {
                 name = C_Spell.GetSpellName(skill.spellID) or skill.name,
                 icon = C_Spell.GetSpellTexture(skill.spellID),
                 spellID = skill.spellID,
@@ -1076,15 +1160,28 @@ local function RegisterSettings()
 
     y = y - 8
     AddSectionHeading("Profession Skills")
+    local placementX = optionX + indent
+    skillPlacementCheckbox = AddCheckbox("Beside profession tabs", function(self)
+        ProfessionSideTabsDB.skillsBesideProfessions = not not self:GetChecked()
+        UpdateButtons()
+    end, placementX, y)
+    skillHoverCheckbox = AddCheckbox("Only on hover", function(self)
+        ProfessionSideTabsDB.skillsOnlyOnHover = not not self:GetChecked()
+        UpdateButtons()
+    end, placementX + columnWidth, y)
+    y = y - checkboxRowHeight - 22
+
+    local skillRowGap = 6
     for index, skill in ipairs(professionSkills) do
         local column = (index - 1) % columns
         local row = math.floor((index - 1) / columns)
         professionSkillCheckboxes[index] = AddCheckbox(skill.name, function(self)
-            ProfessionSideTabsDB.shownProfessionSkills[skill.key] = self:GetChecked() and true or nil
+            ProfessionSideTabsDB.shownProfessionSkills[skill.key] = not not self:GetChecked()
             UpdateButtons()
-        end, optionX + column * columnWidth, y - row * checkboxRowHeight)
+        end, optionX + column * columnWidth, y - row * (checkboxRowHeight + skillRowGap))
     end
-    y = y - math.ceil(#professionSkills / columns) * checkboxRowHeight
+    local skillRows = math.ceil(#professionSkills / columns)
+    y = y - skillRows * checkboxRowHeight - (skillRows - 1) * skillRowGap
 
     y = y - 8
     AddSectionHeading("Death Knights")
@@ -1136,6 +1233,8 @@ local function RegisterSettings()
     function canvas:OnDefault()
         ProfessionSideTabsDB.hiddenPrimaryProfessions = {}
         ProfessionSideTabsDB.shownProfessionSkills = {}
+        ProfessionSideTabsDB.skillsBesideProfessions = true
+        ProfessionSideTabsDB.skillsOnlyOnHover = true
         for _, profession in pairs(secondaryProfessions) do
             ProfessionSideTabsDB[profession.key] = profession.default
         end
