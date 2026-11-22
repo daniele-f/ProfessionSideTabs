@@ -2,7 +2,7 @@ local addonName = ...
 local addon = CreateFrame("Frame")
 
 local settingsCategory
-local openStandaloneSettings
+local toggleStandaloneSettings
 local windowCheckboxes = {}
 local pendingArchaeologyOpen
 local primaryProfessions = {}
@@ -835,10 +835,34 @@ local function CreateDivider(container)
     return divider
 end
 
+local function CreateOverviewSettingsButton(frame)
+    local button = CreateFrame("Button", addonName .. "BookSettingsButton", frame)
+    button:SetSize(26, 26)
+    button:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -26, -36)
+    button:SetNormalAtlas("OptionsIcon-Brown")
+    button:SetHighlightAtlas("OptionsIcon-Brown", "ADD")
+    button:GetHighlightTexture():SetAlpha(0.35)
+    button:SetScript("OnClick", function()
+        if toggleStandaloneSettings then
+            toggleStandaloneSettings()
+        end
+    end)
+    button:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Profession Side Tabs Settings")
+        GameTooltip:Show()
+    end)
+    button:SetScript("OnLeave", GameTooltip_Hide)
+end
+
 local function EnsurePanel(panel, refresh)
     local frame = _G[panel.frameName]
     if panel.container or not frame then
         return
+    end
+
+    if panel == bookPanel then
+        CreateOverviewSettingsButton(frame)
     end
 
     -- Keep the horizontal anchor at the window's scale if the buttons need to shrink.
@@ -1123,8 +1147,15 @@ local function UpdateButtons()
 end
 
 local function CreateStandaloneSettingsWindow(title, height)
-    local window = CreateFrame("Frame", nil, UIParent, "ButtonFrameTemplate")
+    local frameName = addonName .. "StandaloneSettings"
+    local window = CreateFrame("Frame", frameName, UIParent, "ButtonFrameTemplate")
     window:Hide()
+    table.insert(UISpecialFrames, frameName)
+    if GameMenuFrame then
+        GameMenuFrame:HookScript("OnShow", function()
+            window:Hide()
+        end)
+    end
     local width = 650
     window:SetSize(width, height)
     window:HookScript("OnShow", function(self)
@@ -1390,7 +1421,12 @@ local function RegisterSettings()
         end
     end)
 
-    openStandaloneSettings = function(resetPosition)
+    toggleStandaloneSettings = function(resetPosition)
+        if standalone and standalone:IsShown() and not resetPosition then
+            standalone:Hide()
+            return
+        end
+
         if SettingsPanel:IsShown() then
             SettingsPanel:Close(true)
             if SettingsPanel:IsShown() then
@@ -1428,7 +1464,7 @@ local function RegisterSettings()
     end)
     popout:SetScript("OnLeave", GameTooltip_Hide)
     popout:SetScript("OnClick", function()
-        openStandaloneSettings()
+        toggleStandaloneSettings()
     end)
 
     RefreshSettingsCheckboxes()
@@ -1504,10 +1540,10 @@ SlashCmdList["PROFESSIONSIDETABS"] = function(msg)
     EnsureDB()
 
     local cmd, arg = msg:match("^(%S+)%s*(%S*)$")
-    if cmd == "window" and openStandaloneSettings then
+    if cmd == "window" and toggleStandaloneSettings then
         if arg == "" or arg == "reset" then
             C_Timer.After(0, function()
-                openStandaloneSettings(arg == "reset")
+                toggleStandaloneSettings(arg == "reset")
             end)
         else
             print("|cff00ff98PST|r usage: /pst window [reset]")
