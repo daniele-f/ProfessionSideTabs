@@ -715,7 +715,7 @@ local function GetForeverSkillHover(button, square)
 end
 
 local function UpdateTabHover(button)
-    local hovered = button.mouseOver == true
+    local hovered = button.mouseOver == true and not (button.professionData and button.professionData.trackingActive)
     local attachedHover
     if hovered and button.compactSkill and button.tabStyle == tabStyles.Forever then
         attachedHover = GetForeverSkillHover(button, button.foreverGroupUnmasked)
@@ -804,11 +804,20 @@ local function ApplyButtonStyle(button, style, attachedSkill)
     button.leftFlair:SetShown(not isForever and not panelExtension)
     SetSkillBorderAlpha(button, panelExtension and (button.fadeTarget and 0 or button.skillBorderAlpha or 1) or 1)
     UpdateTabHover(button)
+    if isForever then
+        button.selectedGlow:ClearAllPoints()
+        if compact and button.trackingSkill then
+            local inset = math.max(0, style.skillOverlap - 3)
+            button.selectedGlow:SetPoint("TOPLEFT", button, "TOPLEFT", inset, 0)
+            button.selectedGlow:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT")
+        else
+            button.selectedGlow:SetAllPoints()
+        end
+    end
     if not styleChanged then
         PositionButtonIcon(button, false)
         return
     end
-    button.selectedGlow:ClearAllPoints()
     if isForever then
         if not button.foreverIconMask then
             button.foreverIconMask = CreateForeverMask(button, button.icon)
@@ -826,7 +835,6 @@ local function ApplyButtonStyle(button, style, attachedSkill)
         button.bg:SetAtlas("common-sidetab")
         button.hoverGlow:SetAtlas("common-sidetab-hover")
         button.selectedGlow:SetAtlas("common-sidetab-selected")
-        button.selectedGlow:SetAllPoints()
         button.selectedGlow:SetBlendMode("BLEND")
         button.selectedGlow:SetAlpha(1)
     else
@@ -834,6 +842,7 @@ local function ApplyButtonStyle(button, style, attachedSkill)
         button.foreverInset:Hide()
         button.hoverGlow:SetTexture("Interface\\Buttons\\ButtonHilight-Square")
         button.hoverGlow:SetTexCoord(0, 1, 0, 1)
+        button.selectedGlow:ClearAllPoints()
         button.selectedGlow:SetTexture("Interface\\Buttons\\CheckButtonGlow")
         button.selectedGlow:SetTexCoord(0, 1, 0, 1)
         button.selectedGlow:SetPoint("TOPLEFT", button.icon, -20, 20)
@@ -1556,9 +1565,13 @@ local function UpdatePanel(panel, professions, currentSkillLine, style)
                 SetRowTabVisibility(button, true, opening)
                 anyButtonShown = true
             end
-            local isSelected = (panel == craftingPanel and data.skillLine ~= nil and currentSkillLine == data.skillLine)
+            local isSelected = data.trackingActive
+                or (panel == craftingPanel and data.skillLine ~= nil and currentSkillLine == data.skillLine)
                 or (panel == archaeologyPanel and slot == 3)
             UpdateButtonState(button, isSelected)
+            if button.trackingSkill then
+                UpdateTabHover(button)
+            end
         elseif not attachedSkill and button:IsVisible() then
             SetRowTabVisibility(button, false)
             if button.spellAction then
@@ -1626,12 +1639,14 @@ local function UpdateButtons()
             checkbox:GetCheckedTexture():SetDesaturated(not learned)
             checkbox:SetChecked(shown)
         end
-        local hideWhileTracking = trackingInfo and trackingInfo.active and ProfessionSideTabsDB.onlyShowInactiveTracking
+        local trackingActive = trackingInfo and trackingInfo.active
+        local hideWhileTracking = trackingActive and ProfessionSideTabsDB.onlyShowInactiveTracking
         if shown and learned and not hideWhileTracking then
             professions[RUNEFORGING_SLOT + index] = {
                 name = C_Spell.GetSpellName(skill.spellID) or skill.name,
                 icon = C_Spell.GetSpellTexture(skill.spellID) or (trackingInfo and trackingInfo.texture),
                 spellID = skill.spellID,
+                trackingActive = trackingActive,
             }
         end
     end
