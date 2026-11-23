@@ -611,7 +611,7 @@ local function UpdateForeverSkillDividers(frame)
     for index, divider in ipairs(frame.dividers) do
         local left, right = frame.skills[index], frame.skills[index + 1]
         local aligned = right and left:IsShown() and right:IsShown()
-            and not (left.skillSlotClosing or right.skillExiting)
+            and not (left.skillSlotTransition or right.skillExiting)
             and math.abs(left:GetAlpha() - right:GetAlpha()) < 2 / SKILL_SLIDE_DISTANCE
         divider:SetShown(aligned == true)
     end
@@ -856,7 +856,7 @@ local function PositionAttachedSkill(skill)
         if previous == skill then
             break
         end
-        if previous.skillSlotClosing then
+        if previous.skillSlotTransition then
             offset = offset - step * (1 - previous:GetAlpha())
         end
     end
@@ -894,8 +894,27 @@ local function UpdateAttachedSkillVisibility(owner)
     for _, skill in ipairs(skills) do
         shown = shown or (not skill.skillExiting and skill.mouseOver)
     end
-    for _, skill in ipairs(skills) do
-        AnimateAttachedSkill(skill, shown and not skill.skillExiting)
+    local visibleFollower, openedSlot = false, false
+    for index = #skills, 1, -1 do
+        local skill = skills[index]
+        local showSkill = shown and not skill.skillExiting
+        if showSkill and visibleFollower and not skill:IsShown() then
+            skill.skillSlotTransition = true
+            openedSlot = true
+        end
+        visibleFollower = visibleFollower or (showSkill and skill:IsVisible() and skill:GetAlpha() > 0)
+        AnimateAttachedSkill(skill, showSkill)
+    end
+
+    if openedSlot then
+        -- Start the existing skills at their previous positions before the next frame is drawn.
+        for _, skill in ipairs(skills) do
+            PositionAttachedSkill(skill)
+        end
+        local group = skills[1].foreverSkillGroup
+        if group then
+            UpdateForeverSkillDividers(group)
+        end
     end
 end
 
@@ -989,7 +1008,7 @@ local function CreateTabButton(parent, name, onClick)
         UpdateTabHover(self)
         if self.compactSkill then
             self.fadeTarget = nil
-            self.skillSlotClosing = nil
+            self.skillSlotTransition = nil
             self:SetAlpha(1)
             SetSkillBorderAlpha(self, 1)
         end
@@ -1091,7 +1110,7 @@ local function UpdateSpellTab(tab, elapsed)
         end
         tab:SetAlpha(alpha)
         PositionAttachedSkill(tab)
-        if tab.skillSlotClosing then
+        if tab.skillSlotTransition then
             for _, skill in ipairs(tab.skillOwner.attachedSkills) do
                 if skill ~= tab then
                     PositionAttachedSkill(skill)
@@ -1100,7 +1119,7 @@ local function UpdateSpellTab(tab, elapsed)
         end
         if alpha == target then
             tab.fadeTarget = nil
-            tab.skillSlotClosing = nil
+            tab.skillSlotTransition = nil
             if target == 0 then
                 tab:Hide()
                 if tab.skillExiting then
@@ -1329,7 +1348,7 @@ local function LayoutAttachedSkills(panel)
             end
         elseif previousOwner then
             tab.fadeTarget = nil
-            tab.skillSlotClosing = nil
+            tab.skillSlotTransition = nil
             tab:SetAlpha(1)
         end
     end
@@ -1434,8 +1453,8 @@ local function UpdatePanel(panel, professions, currentSkillLine, style)
         local exiting = not data and ProfessionSideTabsDB.skillsBesideProfessions
             and button.professionData and owner and owner:IsShown() and button:IsVisible()
         button.skillExiting = exiting or nil
-        -- Keep collapsing the slot until a reversed animation is fully visible again.
-        button.skillSlotClosing = exiting or (data and button.skillSlotClosing) or nil
+        -- Keep the slot transition active if visibility reverses mid-animation.
+        button.skillSlotTransition = exiting or (data and button.skillSlotTransition) or nil
         if data then
             local attachedSkill = ProfessionSideTabsDB.skillsBesideProfessions and slot > RUNEFORGING_SLOT
             ApplyButtonStyle(button, style, attachedSkill)
