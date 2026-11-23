@@ -59,6 +59,7 @@ local LEGACY_PANEL_HEIGHT = 5 * (BUTTON_SIZE + BUTTON_GAP) + GROUP_SPACER + PANE
 
 local professionJournalSpells = {
     [182] = 193290, -- Herbalism Journal
+    [186] = 2656, -- Mining Journal
     [393] = 194174, -- Skinning Journal
 }
 
@@ -88,9 +89,10 @@ local secondaryProfessions = {
 local professionSkills = {
     { key = "disenchant", name = "Disenchant", spellID = 13262, professionID = 333 },
     { key = "herbGathering", name = "Herb Gathering", spellID = 2366, professionID = 182 },
-    { key = "findHerbs", name = "Find Herbs", spellID = 2383, professionID = 182, tracking = true, alternateTrackingSpellID = 8387, default = false, settingsIndex = 4 },
-    { key = "findMinerals", name = "Find Minerals", spellID = 2580, professionID = 186, tracking = true, alternateTrackingSpellID = 8388, default = false, settingsIndex = 5 },
-    { key = "skinning", name = "Skinning", spellID = 8613, professionID = 393, settingsIndex = 3 },
+    { key = "findHerbs", name = "Find Herbs", spellID = 2383, professionID = 182, tracking = true, alternateTrackingSpellID = 8387, default = false, settingsIndex = 3 },
+    { key = "mining", name = "Mining", spellID = 2575, professionID = 186, settingsIndex = 5 },
+    { key = "findMinerals", name = "Find Minerals", spellID = 2580, professionID = 186, tracking = true, alternateTrackingSpellID = 8388, default = false, settingsIndex = 6 },
+    { key = "skinning", name = "Skinning", spellID = 8613, professionID = 393, settingsIndex = 4 },
     { key = "cookingFire", name = "Cooking Fire", spellID = 818, professionSlot = 5 },
     { key = "fishing", name = "Fishing", spellID = 131474, professionSlot = 4 },
     { key = "survey", name = "Survey", spellID = 80451, professionSlot = 3 },
