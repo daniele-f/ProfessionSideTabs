@@ -14,6 +14,7 @@ local skillPlacementCheckbox, skillHoverCheckbox, inactiveTrackingCheckbox
 
 local BUTTON_SIZE = 48
 local ATTACHED_SKILL_SIZE = 38
+local FOREVER_CAP_WIDTH = 12
 local SKILL_ANIMATION_DURATION = 0.14
 local SKILL_BORDER_FADE_DURATION = 0.06
 local SKILL_SLIDE_DISTANCE = 8
@@ -362,6 +363,10 @@ local function SelectTrackingMenuEntry(index, name, enabled)
 end
 
 local function ToggleSkillTracking(button)
+    if button.skillExiting then
+        return
+    end
+
     local info, index = GetSkillTracking(button.trackingSkill)
     if not index then
         return
@@ -559,7 +564,7 @@ local function CreateForeverSkillStrip(frame, layer, atlas, square)
     end
 
     -- Stretch the straight section only. Keep both caps at the original tab scale.
-    local capWidth = 12
+    local capWidth = FOREVER_CAP_WIDTH
     local cap = (info.rightTexCoord - info.leftTexCoord) * capWidth / ATTACHED_SKILL_SIZE
     local centerLeft, centerRight = info.leftTexCoord + cap, info.rightTexCoord - cap
     local left = CreateSlice(info.leftTexCoord, centerLeft)
@@ -602,13 +607,66 @@ local function CreateForeverSkillDivider(frame)
     return divider
 end
 
+local function UpdateForeverSkillDividers(frame)
+    for index, divider in ipairs(frame.dividers) do
+        local left, right = frame.skills[index], frame.skills[index + 1]
+        local aligned = right and left:IsShown() and right:IsShown()
+            and not (left.skillExiting or right.skillExiting)
+            and math.abs(left:GetAlpha() - right:GetAlpha()) < 2 / SKILL_SLIDE_DISTANCE
+        divider:SetShown(aligned == true)
+    end
+end
+
+local function UpdateForeverSkillFrameEnd(frame, last, endWidth)
+    local info = frame.atlas
+    local file = info and (info.file or info.filename)
+    if not file then
+        return
+    end
+
+    local edge = last.foreverSkillEnd
+    if not edge then
+        -- The end is parented to the moving skill so it inherits the same fade.
+        edge = CreateFrame("Frame", nil, last)
+        edge:SetPoint("TOPRIGHT", last, "TOPRIGHT")
+        edge:SetPoint("BOTTOMRIGHT", last, "BOTTOMRIGHT")
+        edge.rail = edge:CreateTexture(nil, "BACKGROUND")
+        edge.cap = edge:CreateTexture(nil, "BACKGROUND")
+        edge.cap:SetPoint("TOPRIGHT", edge)
+        edge.cap:SetPoint("BOTTOMRIGHT", edge)
+        edge.cap:SetWidth(FOREVER_CAP_WIDTH)
+        edge.rail:SetPoint("TOPLEFT", edge)
+        edge.rail:SetPoint("BOTTOMRIGHT", edge.cap, "BOTTOMLEFT")
+        edge.rail:SetTexture(file)
+        edge.cap:SetTexture(file)
+        last.foreverSkillEnd = edge
+    end
+
+    local width = info.rightTexCoord - info.leftTexCoord
+    local cap = width * FOREVER_CAP_WIDTH / ATTACHED_SKILL_SIZE
+    local centerLeft, centerRight = info.leftTexCoord + cap, info.rightTexCoord - cap
+    local centerWidth = frame:GetWidth() - 2 * FOREVER_CAP_WIDTH
+    local split = centerRight - (centerRight - centerLeft) * (endWidth - FOREVER_CAP_WIDTH) / centerWidth
+    local center, right = frame.borderTextures[2], frame.borderTextures[3]
+    center:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -endWidth, 0)
+    center:SetTexCoord(centerLeft, split, info.topTexCoord, info.bottomTexCoord)
+    right:Hide()
+
+    edge:SetWidth(endWidth)
+    edge:SetFrameLevel(frame:GetFrameLevel())
+    edge.rail:SetTexCoord(split, centerRight, info.topTexCoord, info.bottomTexCoord)
+    edge.cap:SetTexCoord(centerRight, info.rightTexCoord, info.topTexCoord, info.bottomTexCoord)
+    edge:Show()
+end
+
 local function GetForeverSkillFrame(first, skills)
     local frame = first.foreverSkillFrame
     if not frame then
         frame = CreateFrame("Frame", nil, first)
         frame:SetPoint("TOPLEFT", first, "TOPLEFT")
 
-        CreateForeverSkillStrip(frame, "BACKGROUND", "common-sidetab")
+        frame.borderTextures = CreateForeverSkillStrip(frame, "BACKGROUND", "common-sidetab")
+        frame.atlas = C_Texture.GetAtlasInfo("common-sidetab")
         frame.dividers = {}
         first.foreverSkillFrame = frame
     end
@@ -623,16 +681,15 @@ local function GetForeverSkillFrame(first, skills)
         if divider then
             divider:SetPoint("TOPLEFT", skills[index].icon, "TOPRIGHT")
             divider:SetPoint("BOTTOMRIGHT", skills[index + 1].icon, "BOTTOMLEFT")
-            divider:Show()
         end
     end
-    for index = count, #frame.dividers do
-        frame.dividers[index]:Hide()
-    end
+    frame.skills = skills
+    UpdateForeverSkillDividers(frame)
 
     local step = ATTACHED_SKILL_SIZE - first.tabStyle.skillOverlap
     frame:SetSize(ATTACHED_SKILL_SIZE + (count - 1) * step, ATTACHED_SKILL_SIZE)
     frame:SetFrameLevel(math.max(0, first:GetFrameLevel() - 1))
+    UpdateForeverSkillFrameEnd(frame, skills[count], step)
     frame:Show()
     return frame
 end
@@ -688,6 +745,9 @@ local function SetForeverSkillGroup(button, group, isFirst, isLast)
     button.foreverInset:SetShown(group == nil)
     if button.foreverSkillFrame and button.foreverSkillFrame ~= group then
         button.foreverSkillFrame:Hide()
+    end
+    if button.foreverSkillEnd and (not group or not isLast) then
+        button.foreverSkillEnd:Hide()
     end
     local overlap = group and not isFirst and button.tabStyle.skillOverlap or 0
     button:SetHitRectInsets(overlap, 0, 0, 0)
@@ -803,7 +863,7 @@ local function AnimateAttachedSkill(skill, shown)
         skill:Show()
     end
     local target = shown and 1 or 0
-    if skill:GetAlpha() ~= target then
+    if skill:GetAlpha() ~= target or skill.skillExiting then
         if skill.tabStyle == tabStyles.Panel then
             SetSkillBorderAlpha(skill, 0)
         end
@@ -821,10 +881,10 @@ local function UpdateAttachedSkillVisibility(owner)
 
     local shown = not ProfessionSideTabsDB.skillsOnlyOnHover or owner.mouseOver
     for _, skill in ipairs(skills) do
-        shown = shown or skill.mouseOver
+        shown = shown or (not skill.skillExiting and skill.mouseOver)
     end
     for _, skill in ipairs(skills) do
-        AnimateAttachedSkill(skill, shown)
+        AnimateAttachedSkill(skill, shown and not skill.skillExiting)
     end
 end
 
@@ -890,6 +950,9 @@ local function CreateTabButton(parent, name, onClick)
     end)
 
     button:SetScript("OnEnter", function(self)
+        if self.skillExiting then
+            return
+        end
         self.mouseOver = true
         local owner = self.skillOwner or self
         UpdateAttachedSkillVisibility(owner)
@@ -964,6 +1027,13 @@ local function SyncSpellAction(tab)
         return
     end
 
+    if tab.skillExiting then
+        if tab.spellAction and tab.spellAction:IsShown() then
+            tab.spellAction:Hide()
+        end
+        return
+    end
+
     local left, bottom, width, height = tab:GetRect()
     if not left then
         return
@@ -1009,10 +1079,16 @@ local function UpdateSpellTab(tab, elapsed)
         end
         tab:SetAlpha(alpha)
         PositionAttachedSkill(tab)
+        if tab.foreverSkillGroup then
+            UpdateForeverSkillDividers(tab.foreverSkillGroup)
+        end
         if alpha == target then
             tab.fadeTarget = nil
             if target == 0 then
                 tab:Hide()
+                if tab.skillExiting then
+                    tab.refreshSkills()
+                end
                 return
             end
         end
@@ -1139,6 +1215,7 @@ local function EnsurePanel(panel, refresh)
     for index, skill in ipairs(professionSkills) do
         local slot = RUNEFORGING_SLOT + index
         local button = CreateTabButton(container, prefix .. "Tab" .. slot, skill.tracking and ToggleSkillTracking or nil)
+        button.refreshSkills = refresh
         if skill.tracking then
             button.trackingSkill = skill
             button:EnableMouse(true)
@@ -1332,6 +1409,10 @@ local function UpdatePanel(panel, professions, currentSkillLine, style)
     for slot = 1, lastTabSlot do
         local button = panel.buttons[slot]
         local data = professions[slot]
+        local owner = button.skillOwner
+        local exiting = not data and ProfessionSideTabsDB.skillsBesideProfessions
+            and button.professionData and owner and owner:IsShown() and button:IsVisible()
+        button.skillExiting = exiting or nil
         if data then
             local attachedSkill = ProfessionSideTabsDB.skillsBesideProfessions and slot > RUNEFORGING_SLOT
             ApplyButtonStyle(button, style, attachedSkill)
@@ -1345,6 +1426,13 @@ local function UpdatePanel(panel, professions, currentSkillLine, style)
             local isSelected = (panel == craftingPanel and data.skillLine ~= nil and currentSkillLine == data.skillLine)
                 or (panel == archaeologyPanel and slot == 3)
             UpdateButtonState(button, isSelected)
+        elseif exiting then
+            button.mouseOver = nil
+            UpdateTabHover(button)
+            SyncSpellAction(button)
+            if GameTooltip:IsOwned(button) then
+                GameTooltip_Hide()
+            end
         else
             button.slotNumber = nil
             button.professionData = nil
