@@ -490,13 +490,8 @@ local function PositionButtonIcon(button, pressed)
     local shift = pressed and 1 or 0
     local xShift = shift + (button.compactSkill and 1 or (isForever and -2 or 0))
     button.icon:ClearAllPoints()
-    if button.foreverGroupUnmasked then
-        button.icon:SetPoint("TOPLEFT", 6 + shift, -7 - shift)
-        button.icon:SetPoint("BOTTOMRIGHT", -7 + shift, 7 - shift)
-    else
-        button.icon:SetPoint("TOPLEFT", xInset + xShift, -yInset - shift)
-        button.icon:SetPoint("BOTTOMRIGHT", -xInset + xShift, yInset - shift)
-    end
+    button.icon:SetPoint("TOPLEFT", xInset + xShift, -yInset - shift)
+    button.icon:SetPoint("BOTTOMRIGHT", -xInset + xShift, yInset - shift)
 end
 
 local function CreateForeverMask(button, texture)
@@ -604,6 +599,9 @@ local function GetForeverSkillHover(button, square)
     local hover = button[key]
     if not hover then
         hover = CreateFrame("Frame", nil, button)
+        -- The atlas has transparent padding before the visible gold edge.
+        local leftInset = math.max(0, button.tabStyle.skillOverlap - 3)
+        hover:SetPoint("TOPLEFT", button, "TOPLEFT", leftInset, 0)
         hover:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT")
         local textures = CreateForeverSkillStrip(hover, "OVERLAY", "common-sidetab-hover", square)
         for _, texture in ipairs(textures) do
@@ -613,13 +611,6 @@ local function GetForeverSkillHover(button, square)
         button[key] = hover
     end
 
-    local skills = button.skillOwner and button.skillOwner.attachedSkills
-    local leftInset = button.tabStyle.skillOverlap
-    if skills and skills[1] == button then
-        -- The atlas has transparent padding before the visible gold edge.
-        leftInset = math.max(0, leftInset - 3)
-    end
-    hover:SetPoint("TOPLEFT", button, "TOPLEFT", leftInset, 0)
     return hover
 end
 
