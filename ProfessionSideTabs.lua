@@ -10,7 +10,7 @@ local primaryCheckboxes = {}
 local secondaryCheckboxes = {}
 local runeforgingCheckbox
 local professionSkillCheckboxes = {}
-local skillPlacementCheckbox, skillHoverCheckbox
+local skillPlacementCheckbox, skillHoverCheckbox, inactiveTrackingCheckbox
 
 local BUTTON_SIZE = 48
 local ATTACHED_SKILL_SIZE = 38
@@ -87,6 +87,8 @@ local secondaryProfessions = {
 local professionSkills = {
     { key = "disenchant", name = "Disenchant", spellID = 13262, professionID = 333 },
     { key = "herbGathering", name = "Herb Gathering", spellID = 2366, professionID = 182 },
+    { key = "findHerbs", name = "Find Herbs", spellID = 2383, professionID = 182, tracking = true, alternateTrackingSpellID = 8387, default = false },
+    { key = "findMinerals", name = "Find Minerals", spellID = 2580, professionID = 186, tracking = true, alternateTrackingSpellID = 8388, default = false },
     { key = "skinning", name = "Skinning", spellID = 8613, professionID = 393 },
     { key = "cookingFire", name = "Cooking Fire", spellID = 818, professionSlot = 5 },
     { key = "fishing", name = "Fishing", spellID = 131474, professionSlot = 4 },
@@ -95,7 +97,7 @@ local professionSkills = {
 local primarySkillSlots, secondarySkillSlots = {}, {}
 local lastTabSlot = RUNEFORGING_SLOT + #professionSkills
 for index = 1, #professionSkills do
-    local slots = index <= 3 and primarySkillSlots or secondarySkillSlots
+    local slots = professionSkills[index].professionID and primarySkillSlots or secondarySkillSlots
     slots[#slots + 1] = RUNEFORGING_SLOT + index
 end
 
@@ -322,6 +324,55 @@ local function SetSecondaryShown(slot, shown)
     ProfessionSideTabsDB[secondaryProfessions[slot].key] = shown
 end
 
+local function GetSkillTracking(skill)
+    for index = 1, C_Minimap.GetNumTrackingTypes() do
+        local info = C_Minimap.GetTrackingInfo(index)
+        local filter = C_Minimap.GetTrackingFilter and C_Minimap.GetTrackingFilter(index)
+        local trackingSpellID = (filter and filter.spellID) or (info and info.spellID)
+        if info and (trackingSpellID == skill.spellID or trackingSpellID == skill.alternateTrackingSpellID) then
+            return info, index
+        end
+    end
+end
+
+local function SelectTrackingMenuEntry(index, name, enabled)
+    local tracking = MinimapCluster and MinimapCluster.Tracking
+    local dropdown = tracking and tracking.Button
+    if not dropdown or not dropdown.GenerateMenu or not MenuUtil or not MenuUtil.TraverseMenu then
+        return false
+    end
+
+    dropdown:GenerateMenu()
+    local menu = dropdown:GetMenuDescription()
+    if not menu then
+        return false
+    end
+
+    -- The minimap menu caches its checkbox state separately from the tracking API.
+    return MenuUtil.TraverseMenu(menu, function(description)
+        local data = description:GetData()
+        if description:IsCheckbox() and type(data) == "table" and data.index == index and data.name == name
+            and description:IsSelected() ~= enabled then
+            return description:Pick(MenuInputContext.MouseButton, "LeftButton")
+        end
+    end)
+end
+
+local function ToggleSkillTracking(button)
+    local info, index = GetSkillTracking(button.trackingSkill)
+    if not index then
+        return
+    end
+
+    local enabled = not info.active
+    if not SelectTrackingMenuEntry(index, info.name, enabled) then
+        C_Minimap.SetTracking(index, enabled)
+    end
+    if Minimap and Minimap.UpdateBlips then
+        Minimap:UpdateBlips()
+    end
+end
+
 local function IsProfessionSkillLearned(spellID)
     return C_SpellBook.IsSpellKnown(spellID)
         or (C_SpellBook.FindSpellBookSlotForSpell and C_SpellBook.FindSpellBookSlotForSpell(spellID, false, false))
@@ -338,6 +389,7 @@ local function RefreshSettingsCheckboxes()
         skillHoverCheckbox:SetEnabled(beside)
         skillHoverCheckbox.label:SetAlpha(beside and 1 or 0.5)
         skillHoverCheckbox:SetChecked(ProfessionSideTabsDB.skillsOnlyOnHover == true)
+        inactiveTrackingCheckbox:SetChecked(ProfessionSideTabsDB.onlyShowInactiveTracking == true)
     end
 
     if runeforgingCheckbox then
@@ -381,7 +433,9 @@ local function UpdateButtonTooltip(self)
     end
 
     GameTooltip:SetOwner(self, "ANCHOR_NONE")
-    GameTooltip:SetPoint("LEFT", self.attachedSkill or self, "RIGHT", 12, 0)
+    local owner = self.skillOwner or self
+    local attached = owner.attachedSkills
+    GameTooltip:SetPoint("LEFT", attached and attached[#attached] or self, "RIGHT", 12, 0)
     local spellID = self.professionData.spellID
     if spellID and GameTooltip:SetSpellByID(spellID) then
         GameTooltip:Show()
@@ -586,6 +640,21 @@ local function AnimateAttachedSkill(skill, shown)
     end
 end
 
+local function UpdateAttachedSkillVisibility(owner)
+    local skills = owner.attachedSkills
+    if not skills then
+        return
+    end
+
+    local shown = not ProfessionSideTabsDB.skillsOnlyOnHover or owner.mouseOver
+    for _, skill in ipairs(skills) do
+        shown = shown or skill.mouseOver
+    end
+    for _, skill in ipairs(skills) do
+        AnimateAttachedSkill(skill, shown)
+    end
+end
+
 local function CreateTabButton(parent, name, onClick)
     local button = CreateFrame("Button", name, parent)
     button.tabStyle = tabStyles.Panel
@@ -649,10 +718,7 @@ local function CreateTabButton(parent, name, onClick)
 
     button:SetScript("OnEnter", function(self)
         self.mouseOver = true
-        local skill = self.attachedSkill or (self.skillOwner and self)
-        if skill then
-            AnimateAttachedSkill(skill, true)
-        end
+        UpdateAttachedSkillVisibility(self.skillOwner or self)
         self.hoverGlow:Show()
         UpdateButtonTooltip(self)
     end)
@@ -663,20 +729,20 @@ local function CreateTabButton(parent, name, onClick)
         GameTooltip_Hide()
 
         local owner = self.skillOwner or self
-        local skill = owner.attachedSkill
-        if skill and ProfessionSideTabsDB.skillsOnlyOnHover then
+        if owner.attachedSkills and ProfessionSideTabsDB.skillsOnlyOnHover then
             C_Timer.After(0.2, function()
-                if owner.attachedSkill == skill and ProfessionSideTabsDB.skillsOnlyOnHover
-                    and not owner.mouseOver and not skill.mouseOver
-                then
-                    AnimateAttachedSkill(skill, false)
-                end
+                UpdateAttachedSkillVisibility(owner)
             end)
         end
     end)
 
     button:SetScript("OnHide", function(self)
         self.mouseOver = nil
+        if self.compactSkill then
+            self.fadeTarget = nil
+            self:SetAlpha(1)
+            SetSkillBorderAlpha(self, 1)
+        end
     end)
 
     button:SetScript("OnMouseDown", function(self)
@@ -779,7 +845,9 @@ local function UpdateSpellTab(tab, elapsed)
         SetSkillBorderAlpha(tab, math.min(1, tab.skillBorderAlpha + elapsed / SKILL_BORDER_FADE_DURATION))
     end
 
-    SyncSpellAction(tab)
+    if tab.spellID then
+        SyncSpellAction(tab)
+    end
 end
 
 local function ConfigureSpellTab(tab, spellID, spellName)
@@ -789,9 +857,6 @@ local function ConfigureSpellTab(tab, spellID, spellName)
     tab:SetScript("OnClick", nil)
     tab:SetScript("OnUpdate", UpdateSpellTab)
     tab:HookScript("OnHide", function(self)
-        self.fadeTarget = nil
-        self:SetAlpha(1)
-        SetSkillBorderAlpha(self, 1)
         local action = self.spellAction
         if action then
             -- Finish a spell click if PreClick just closed the source window.
@@ -898,8 +963,15 @@ local function EnsurePanel(panel, refresh)
     ConfigureSpellTab(panel.buttons[RUNEFORGING_SLOT], RUNEFORGING_SPELL_ID, "Runeforging")
     for index, skill in ipairs(professionSkills) do
         local slot = RUNEFORGING_SLOT + index
-        local button = CreateTabButton(container, prefix .. "Tab" .. slot)
-        ConfigureSpellTab(button, skill.spellID, skill.name)
+        local button = CreateTabButton(container, prefix .. "Tab" .. slot, skill.tracking and ToggleSkillTracking or nil)
+        if skill.tracking then
+            button.trackingSkill = skill
+            button:EnableMouse(true)
+            button:RegisterForClicks("LeftButtonUp")
+            button:SetScript("OnUpdate", UpdateSpellTab)
+        else
+            ConfigureSpellTab(button, skill.spellID, skill.name)
+        end
         panel.buttons[slot] = button
     end
 
@@ -951,11 +1023,10 @@ end
 
 local function LayoutAttachedSkills(panel)
     for slot = 1, 5 do
-        panel.buttons[slot].attachedSkill = nil
+        panel.buttons[slot].attachedSkills = nil
     end
 
     local beside = ProfessionSideTabsDB.skillsBesideProfessions
-    local hoverOnly = ProfessionSideTabsDB.skillsOnlyOnHover
     for index, skill in ipairs(professionSkills) do
         local tab = panel.buttons[RUNEFORGING_SLOT + index]
         local previousOwner = tab.skillOwner
@@ -972,13 +1043,15 @@ local function LayoutAttachedSkills(panel)
                 end
             end
             if tab.professionData and owner and owner:IsShown() then
-                owner.attachedSkill = tab
+                local skills = owner.attachedSkills or {}
+                owner.attachedSkills = skills
                 tab.skillOwner = owner
                 local style = tab.tabStyle
                 local panelInset = style == tabStyles.Panel and (panel.container:GetWidth() - style.left - style.width) or 0
-                tab.attachedOffset = panelInset - style.skillOverlap
+                local step = ATTACHED_SKILL_SIZE - style.skillOverlap
+                tab.attachedOffset = panelInset - style.skillOverlap + #skills * step
+                skills[#skills + 1] = tab
                 PositionAttachedSkill(tab)
-                AnimateAttachedSkill(tab, not hoverOnly or owner.mouseOver or tab.mouseOver)
             else
                 tab:Hide()
             end
@@ -986,6 +1059,9 @@ local function LayoutAttachedSkills(panel)
             tab.fadeTarget = nil
             tab:SetAlpha(1)
         end
+    end
+    for slot = 1, 5 do
+        UpdateAttachedSkillVisibility(panel.buttons[slot])
     end
 end
 
@@ -1122,18 +1198,29 @@ local function UpdateButtons()
     end
 
     for index, skill in ipairs(professionSkills) do
-        local learned = IsProfessionSkillLearned(skill.spellID)
-        local shown = ProfessionSideTabsDB.shownProfessionSkills[skill.key] ~= false
+        local learned, trackingInfo
+        if skill.tracking then
+            trackingInfo = GetSkillTracking(skill)
+            learned = trackingInfo ~= nil
+        else
+            learned = IsProfessionSkillLearned(skill.spellID)
+        end
+        local shown = ProfessionSideTabsDB.shownProfessionSkills[skill.key]
+        if shown == nil then
+            shown = skill.default ~= false
+        end
         local checkbox = professionSkillCheckboxes[index]
         if checkbox then
-            checkbox.label:SetText(skill.name .. (learned and "" or " (Not learned)"))
+            local label = skill.name .. (skill.tracking and "*" or "")
+            checkbox.label:SetText(label .. (learned and "" or " (Not learned)"))
             checkbox:GetCheckedTexture():SetDesaturated(not learned)
             checkbox:SetChecked(shown)
         end
-        if shown and learned then
+        local hideWhileTracking = trackingInfo and trackingInfo.active and ProfessionSideTabsDB.onlyShowInactiveTracking
+        if shown and learned and not hideWhileTracking then
             professions[RUNEFORGING_SLOT + index] = {
                 name = C_Spell.GetSpellName(skill.spellID) or skill.name,
-                icon = C_Spell.GetSpellTexture(skill.spellID),
+                icon = C_Spell.GetSpellTexture(skill.spellID) or (trackingInfo and trackingInfo.texture),
                 spellID = skill.spellID,
             }
         end
@@ -1322,7 +1409,7 @@ local function RegisterSettings()
     y = y - 8
     AddSectionHeading("Profession Skills")
     local placementX = optionX + indent
-    skillPlacementCheckbox = AddCheckbox("Beside profession tabs", function(self)
+    skillPlacementCheckbox = AddCheckbox("Next to profession tabs", function(self)
         ProfessionSideTabsDB.skillsBesideProfessions = not not self:GetChecked()
         UpdateButtons()
     end, placementX, y)
@@ -1330,18 +1417,32 @@ local function RegisterSettings()
         ProfessionSideTabsDB.skillsOnlyOnHover = not not self:GetChecked()
         UpdateButtons()
     end, placementX + columnWidth, y)
+    inactiveTrackingCheckbox = AddCheckbox("Only when not\ntracking", function(self)
+        ProfessionSideTabsDB.onlyShowInactiveTracking = not not self:GetChecked()
+        UpdateButtons()
+    end, placementX + 2 * columnWidth, y)
+    local trackingLabel = inactiveTrackingCheckbox.label
+    local trackingAsterisk = inactiveTrackingCheckbox:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    trackingAsterisk:SetText("*")
+    local asteriskWidth = trackingAsterisk:GetStringWidth() + 4
+    trackingLabel:ClearAllPoints()
+    trackingLabel:SetPoint("LEFT", inactiveTrackingCheckbox, "RIGHT", 4 + asteriskWidth, 0)
+    trackingLabel:SetWidth(trackingLabel:GetWidth() - asteriskWidth)
+    trackingAsterisk:SetPoint("TOPRIGHT", trackingLabel, "TOPLEFT", -4, 0)
     y = y - checkboxRowHeight - 22
 
     local skillRowGap = 6
+    local primarySkillRows = math.ceil(#primarySkillSlots / columns)
+    local skillRows = primarySkillRows + math.ceil(#secondarySkillSlots / columns)
     for index, skill in ipairs(professionSkills) do
-        local column = (index - 1) % columns
-        local row = math.floor((index - 1) / columns)
+        local gridIndex = skill.professionID and index or (primarySkillRows * columns + index - #primarySkillSlots)
+        local column = (gridIndex - 1) % columns
+        local row = math.floor((gridIndex - 1) / columns)
         professionSkillCheckboxes[index] = AddCheckbox(skill.name, function(self)
             ProfessionSideTabsDB.shownProfessionSkills[skill.key] = not not self:GetChecked()
             UpdateButtons()
         end, optionX + column * columnWidth, y - row * (checkboxRowHeight + skillRowGap))
     end
-    local skillRows = math.ceil(#professionSkills / columns)
     y = y - skillRows * checkboxRowHeight - (skillRows - 1) * skillRowGap
 
     y = y - 8
@@ -1396,6 +1497,7 @@ local function RegisterSettings()
         ProfessionSideTabsDB.shownProfessionSkills = {}
         ProfessionSideTabsDB.skillsBesideProfessions = true
         ProfessionSideTabsDB.skillsOnlyOnHover = true
+        ProfessionSideTabsDB.onlyShowInactiveTracking = false
         for _, profession in pairs(secondaryProfessions) do
             ProfessionSideTabsDB[profession.key] = profession.default
         end
@@ -1504,6 +1606,7 @@ addon:SetScript("OnEvent", function(self, event, loadedAddon)
     if event == "TRADE_SKILL_SHOW"
         or event == "SKILL_LINES_CHANGED"
         or event == "SPELLS_CHANGED"
+        or event == "MINIMAP_UPDATE_TRACKING"
         or event == "CHAT_MSG_SKILL"
         or event == "TRADE_SKILL_LIST_UPDATE"
         or event == "TRADE_SKILL_NAME_UPDATE"
@@ -1519,6 +1622,7 @@ addon:RegisterEvent("TRADE_SKILL_SHOW")
 addon:RegisterEvent("TRADE_SKILL_CLOSE")
 addon:RegisterEvent("SKILL_LINES_CHANGED")
 addon:RegisterEvent("SPELLS_CHANGED")
+addon:RegisterEvent("MINIMAP_UPDATE_TRACKING")
 addon:RegisterEvent("CHAT_MSG_SKILL")
 addon:RegisterEvent("TRADE_SKILL_LIST_UPDATE")
 addon:RegisterEvent("TRADE_SKILL_NAME_UPDATE")
