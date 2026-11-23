@@ -17,6 +17,7 @@ local ATTACHED_SKILL_SIZE = 38
 local SKILL_ANIMATION_DURATION = 0.14
 local SKILL_BORDER_FADE_DURATION = 0.06
 local SKILL_SLIDE_DISTANCE = 8
+local TAB_HOVER_ALPHA = 0.55
 local PANEL_BG_R, PANEL_BG_G, PANEL_BG_B = 0.14, 0.12, 0.10
 local BUTTON_GAP = 6
 local GROUP_SPACER = 14
@@ -87,9 +88,9 @@ local secondaryProfessions = {
 local professionSkills = {
     { key = "disenchant", name = "Disenchant", spellID = 13262, professionID = 333 },
     { key = "herbGathering", name = "Herb Gathering", spellID = 2366, professionID = 182 },
-    { key = "findHerbs", name = "Find Herbs", spellID = 2383, professionID = 182, tracking = true, alternateTrackingSpellID = 8387, default = false },
-    { key = "findMinerals", name = "Find Minerals", spellID = 2580, professionID = 186, tracking = true, alternateTrackingSpellID = 8388, default = false },
-    { key = "skinning", name = "Skinning", spellID = 8613, professionID = 393 },
+    { key = "findHerbs", name = "Find Herbs", spellID = 2383, professionID = 182, tracking = true, alternateTrackingSpellID = 8387, default = false, settingsIndex = 4 },
+    { key = "findMinerals", name = "Find Minerals", spellID = 2580, professionID = 186, tracking = true, alternateTrackingSpellID = 8388, default = false, settingsIndex = 5 },
+    { key = "skinning", name = "Skinning", spellID = 8613, professionID = 393, settingsIndex = 3 },
     { key = "cookingFire", name = "Cooking Fire", spellID = 818, professionSlot = 5 },
     { key = "fishing", name = "Fishing", spellID = 131474, professionSlot = 4 },
     { key = "survey", name = "Survey", spellID = 80451, professionSlot = 3 },
@@ -489,8 +490,13 @@ local function PositionButtonIcon(button, pressed)
     local shift = pressed and 1 or 0
     local xShift = shift + (button.compactSkill and 1 or (isForever and -2 or 0))
     button.icon:ClearAllPoints()
-    button.icon:SetPoint("TOPLEFT", xInset + xShift, -yInset - shift)
-    button.icon:SetPoint("BOTTOMRIGHT", -xInset + xShift, yInset - shift)
+    if button.foreverGroupUnmasked then
+        button.icon:SetPoint("TOPLEFT", 6 + shift, -7 - shift)
+        button.icon:SetPoint("BOTTOMRIGHT", -7 + shift, 7 - shift)
+    else
+        button.icon:SetPoint("TOPLEFT", xInset + xShift, -yInset - shift)
+        button.icon:SetPoint("BOTTOMRIGHT", -xInset + xShift, yInset - shift)
+    end
 end
 
 local function CreateForeverMask(button, texture)
@@ -526,12 +532,141 @@ end
 
 local function SetSkillBorderAlpha(skill, alpha)
     skill.skillBorderAlpha = alpha
-    skill.hoverGlow:SetAlpha(0.55 * alpha)
+    skill.hoverGlow:SetAlpha(TAB_HOVER_ALPHA * alpha)
     if skill.panelTrim then
         for _, edge in pairs(skill.panelTrim) do
             edge:SetAlpha(alpha)
         end
     end
+end
+
+local function CreateForeverSkillStrip(frame, layer, atlas, square)
+    local info = C_Texture.GetAtlasInfo(atlas)
+    local file = info and (info.file or info.filename)
+    if not file then
+        local texture = frame:CreateTexture(nil, layer)
+        texture:SetAtlas(atlas)
+        texture:SetAllPoints()
+        return { texture }
+    end
+
+    local function CreateSlice(left, right)
+        local texture = frame:CreateTexture(nil, layer)
+        texture:SetTexture(file)
+        texture:SetTexCoord(left, right, info.topTexCoord, info.bottomTexCoord)
+        return texture
+    end
+
+    -- Stretch the straight section only. Keep both caps at the original tab scale.
+    local capWidth = 12
+    local cap = (info.rightTexCoord - info.leftTexCoord) * capWidth / ATTACHED_SKILL_SIZE
+    local centerLeft, centerRight = info.leftTexCoord + cap, info.rightTexCoord - cap
+    local left = CreateSlice(info.leftTexCoord, centerLeft)
+    local center = CreateSlice(centerLeft, centerRight)
+    local right
+    if square then
+        -- Mirror the straight left cap for the inner edge of the square highlight.
+        right = CreateSlice(centerLeft, info.leftTexCoord)
+    else
+        right = CreateSlice(centerRight, info.rightTexCoord)
+    end
+    left:SetPoint("TOPLEFT", frame)
+    left:SetPoint("BOTTOMLEFT", frame)
+    left:SetWidth(capWidth)
+    right:SetPoint("TOPRIGHT", frame)
+    right:SetPoint("BOTTOMRIGHT", frame)
+    right:SetWidth(capWidth)
+    center:SetPoint("TOPLEFT", left, "TOPRIGHT")
+    center:SetPoint("BOTTOMRIGHT", right, "BOTTOMLEFT")
+    return { left, center, right }
+end
+
+local function GetForeverSkillFrame(first, count)
+    local frame = first.foreverSkillFrame
+    if not frame then
+        frame = CreateFrame("Frame", nil, first)
+        frame:SetPoint("TOPLEFT", first, "TOPLEFT")
+
+        CreateForeverSkillStrip(frame, "BACKGROUND", "common-sidetab")
+
+        first.foreverSkillFrame = frame
+    end
+
+    local step = ATTACHED_SKILL_SIZE - first.tabStyle.skillOverlap
+    frame:SetSize(ATTACHED_SKILL_SIZE + (count - 1) * step, ATTACHED_SKILL_SIZE)
+    frame:SetFrameLevel(math.max(0, first:GetFrameLevel() - 1))
+    frame:Show()
+    return frame
+end
+
+local function GetForeverSkillHover(button, square)
+    local key = square and "squareSkillHover" or "beveledSkillHover"
+    local hover = button[key]
+    if not hover then
+        hover = CreateFrame("Frame", nil, button)
+        hover:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT")
+        local textures = CreateForeverSkillStrip(hover, "OVERLAY", "common-sidetab-hover", square)
+        for _, texture in ipairs(textures) do
+            texture:SetBlendMode("ADD")
+            texture:SetAlpha(TAB_HOVER_ALPHA)
+        end
+        button[key] = hover
+    end
+
+    local skills = button.skillOwner and button.skillOwner.attachedSkills
+    local leftInset = button.tabStyle.skillOverlap
+    if skills and skills[1] == button then
+        -- The atlas has transparent padding before the visible gold edge.
+        leftInset = math.max(0, leftInset - 3)
+    end
+    hover:SetPoint("TOPLEFT", button, "TOPLEFT", leftInset, 0)
+    return hover
+end
+
+local function UpdateTabHover(button)
+    local hovered = button.mouseOver == true
+    local attachedHover
+    if hovered and button.compactSkill and button.tabStyle == tabStyles.Forever then
+        attachedHover = GetForeverSkillHover(button, button.foreverGroupUnmasked)
+    end
+
+    if button.attachedHover ~= attachedHover then
+        if button.attachedHover then
+            button.attachedHover:Hide()
+        end
+        button.attachedHover = attachedHover
+        if attachedHover then
+            attachedHover:Show()
+        end
+    end
+    button.hoverGlow:SetShown(hovered and not attachedHover)
+end
+
+local function SetForeverSkillGroup(button, group, isFirst, isLast)
+    local unmasked = group ~= nil and not isLast
+    local wasUnmasked = button.foreverGroupUnmasked == true
+    if button.foreverSkillGroup == group and wasUnmasked == unmasked then
+        return
+    end
+
+    button.foreverSkillGroup = group
+    button.bg:SetShown(group == nil)
+    button.foreverInset:SetShown(group == nil)
+    if button.foreverSkillFrame and button.foreverSkillFrame ~= group then
+        button.foreverSkillFrame:Hide()
+    end
+    local overlap = group and not isFirst and button.tabStyle.skillOverlap or 0
+    button:SetHitRectInsets(overlap, 0, 0, 0)
+    if wasUnmasked ~= unmasked then
+        button.foreverGroupUnmasked = unmasked
+        if unmasked then
+            button.icon:RemoveMaskTexture(button.foreverIconMask)
+        else
+            button.icon:AddMaskTexture(button.foreverIconMask)
+        end
+    end
+    PositionButtonIcon(button, false)
+    UpdateTabHover(button)
 end
 
 local function ApplyButtonStyle(button, style, attachedSkill)
@@ -542,6 +677,9 @@ local function ApplyButtonStyle(button, style, attachedSkill)
         return
     end
 
+    if not compact or not isForever then
+        SetForeverSkillGroup(button, nil)
+    end
     if compact and isForever then
         button.normalFrameLevel = button.normalFrameLevel or button:GetFrameLevel()
         button:SetFrameLevel(math.max(0, button.normalFrameLevel - 1))
@@ -571,6 +709,7 @@ local function ApplyButtonStyle(button, style, attachedSkill)
     button.border:SetShown(not isForever and not panelExtension)
     button.leftFlair:SetShown(not isForever and not panelExtension)
     SetSkillBorderAlpha(button, panelExtension and (button.fadeTarget and 0 or button.skillBorderAlpha or 1) or 1)
+    UpdateTabHover(button)
     if not styleChanged then
         PositionButtonIcon(button, false)
         return
@@ -681,7 +820,7 @@ local function CreateTabButton(parent, name, onClick)
     hoverGlow:SetAllPoints()
     hoverGlow:SetTexture("Interface\\Buttons\\ButtonHilight-Square")
     hoverGlow:SetBlendMode("ADD")
-    hoverGlow:SetAlpha(0.55)
+    hoverGlow:SetAlpha(TAB_HOVER_ALPHA)
     hoverGlow:Hide()
     button.hoverGlow = hoverGlow
 
@@ -718,14 +857,15 @@ local function CreateTabButton(parent, name, onClick)
 
     button:SetScript("OnEnter", function(self)
         self.mouseOver = true
-        UpdateAttachedSkillVisibility(self.skillOwner or self)
-        self.hoverGlow:Show()
+        local owner = self.skillOwner or self
+        UpdateAttachedSkillVisibility(owner)
+        UpdateTabHover(self)
         UpdateButtonTooltip(self)
     end)
 
     button:SetScript("OnLeave", function(self)
         self.mouseOver = nil
-        self.hoverGlow:Hide()
+        UpdateTabHover(self)
         GameTooltip_Hide()
 
         local owner = self.skillOwner or self
@@ -738,6 +878,7 @@ local function CreateTabButton(parent, name, onClick)
 
     button:SetScript("OnHide", function(self)
         self.mouseOver = nil
+        UpdateTabHover(self)
         if self.compactSkill then
             self.fadeTarget = nil
             self:SetAlpha(1)
@@ -1060,8 +1201,20 @@ local function LayoutAttachedSkills(panel)
             tab:SetAlpha(1)
         end
     end
+    for slot = RUNEFORGING_SLOT + 1, lastTabSlot do
+        local tab = panel.buttons[slot]
+        local skills = tab.skillOwner and tab.skillOwner.attachedSkills
+        if tab.tabStyle == tabStyles.Forever and skills and #skills > 1 then
+            local first = skills[1]
+            local group = first == tab and GetForeverSkillFrame(first, #skills) or first.foreverSkillFrame
+            SetForeverSkillGroup(tab, group, first == tab, skills[#skills] == tab)
+        else
+            SetForeverSkillGroup(tab, nil)
+        end
+    end
     for slot = 1, 5 do
-        UpdateAttachedSkillVisibility(panel.buttons[slot])
+        local owner = panel.buttons[slot]
+        UpdateAttachedSkillVisibility(owner)
     end
 end
 
@@ -1435,7 +1588,7 @@ local function RegisterSettings()
     local primarySkillRows = math.ceil(#primarySkillSlots / columns)
     local skillRows = primarySkillRows + math.ceil(#secondarySkillSlots / columns)
     for index, skill in ipairs(professionSkills) do
-        local gridIndex = skill.professionID and index or (primarySkillRows * columns + index - #primarySkillSlots)
+        local gridIndex = skill.settingsIndex or (skill.professionID and index or (primarySkillRows * columns + index - #primarySkillSlots))
         local column = (gridIndex - 1) % columns
         local row = math.floor((gridIndex - 1) / columns)
         professionSkillCheckboxes[index] = AddCheckbox(skill.name, function(self)
