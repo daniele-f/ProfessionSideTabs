@@ -582,15 +582,52 @@ local function CreateForeverSkillStrip(frame, layer, atlas, square)
     return { left, center, right }
 end
 
-local function GetForeverSkillFrame(first, count)
+local function CreateForeverSkillDivider(frame)
+    local info = C_Texture.GetAtlasInfo("common-sidetab")
+    local file = info and (info.file or info.filename)
+    if not file then
+        return
+    end
+
+    -- Rotate a narrow sample of the top bevel to form the vertical divider.
+    local width = info.rightTexCoord - info.leftTexCoord
+    local height = info.bottomTexCoord - info.topTexCoord
+    local left = info.leftTexCoord + width * 0.45
+    local right = info.leftTexCoord + width * 0.55
+    local outer = info.topTexCoord + height * 2 / ATTACHED_SKILL_SIZE
+    local inner = info.topTexCoord + height * 5 / ATTACHED_SKILL_SIZE
+    local divider = frame:CreateTexture(nil, "BORDER")
+    divider:SetTexture(file)
+    divider:SetTexCoord(left, inner, right, inner, left, outer, right, outer)
+    return divider
+end
+
+local function GetForeverSkillFrame(first, skills)
     local frame = first.foreverSkillFrame
     if not frame then
         frame = CreateFrame("Frame", nil, first)
         frame:SetPoint("TOPLEFT", first, "TOPLEFT")
 
         CreateForeverSkillStrip(frame, "BACKGROUND", "common-sidetab")
-
+        frame.dividers = {}
         first.foreverSkillFrame = frame
+    end
+
+    local count = #skills
+    for index = 1, count - 1 do
+        local divider = frame.dividers[index]
+        if not divider then
+            divider = CreateForeverSkillDivider(frame)
+            frame.dividers[index] = divider
+        end
+        if divider then
+            divider:SetPoint("TOPLEFT", skills[index].icon, "TOPRIGHT")
+            divider:SetPoint("BOTTOMRIGHT", skills[index + 1].icon, "BOTTOMLEFT")
+            divider:Show()
+        end
+    end
+    for index = count, #frame.dividers do
+        frame.dividers[index]:Hide()
     end
 
     local step = ATTACHED_SKILL_SIZE - first.tabStyle.skillOverlap
@@ -1203,7 +1240,7 @@ local function LayoutAttachedSkills(panel)
         local skills = tab.skillOwner and tab.skillOwner.attachedSkills
         if tab.tabStyle == tabStyles.Forever and skills and #skills > 1 then
             local first = skills[1]
-            local group = first == tab and GetForeverSkillFrame(first, #skills) or first.foreverSkillFrame
+            local group = first == tab and GetForeverSkillFrame(first, skills) or first.foreverSkillFrame
             SetForeverSkillGroup(tab, group, first == tab, skills[#skills] == tab)
         else
             SetForeverSkillGroup(tab, nil)
