@@ -611,7 +611,7 @@ local function UpdateForeverSkillDividers(frame)
     for index, divider in ipairs(frame.dividers) do
         local left, right = frame.skills[index], frame.skills[index + 1]
         local aligned = right and left:IsShown() and right:IsShown()
-            and not (left.skillExiting or right.skillExiting)
+            and not (left.skillSlotClosing or right.skillExiting)
             and math.abs(left:GetAlpha() - right:GetAlpha()) < 2 / SKILL_SLIDE_DISTANCE
         divider:SetShown(aligned == true)
     end
@@ -849,8 +849,19 @@ local function GetAttachedSkillSlide(skill)
 end
 
 local function PositionAttachedSkill(skill)
+    local owner = skill.skillOwner
+    local offset = skill.attachedOffset - GetAttachedSkillSlide(skill)
+    local step = ATTACHED_SKILL_SIZE - skill.tabStyle.skillOverlap
+    for _, previous in ipairs(owner.attachedSkills) do
+        if previous == skill then
+            break
+        end
+        if previous.skillSlotClosing then
+            offset = offset - step * (1 - previous:GetAlpha())
+        end
+    end
     skill:ClearAllPoints()
-    skill:SetPoint("LEFT", skill.skillOwner, "RIGHT", skill.attachedOffset - GetAttachedSkillSlide(skill), 0)
+    skill:SetPoint("LEFT", owner, "RIGHT", offset, 0)
 end
 
 local function AnimateAttachedSkill(skill, shown)
@@ -978,6 +989,7 @@ local function CreateTabButton(parent, name, onClick)
         UpdateTabHover(self)
         if self.compactSkill then
             self.fadeTarget = nil
+            self.skillSlotClosing = nil
             self:SetAlpha(1)
             SetSkillBorderAlpha(self, 1)
         end
@@ -1079,11 +1091,16 @@ local function UpdateSpellTab(tab, elapsed)
         end
         tab:SetAlpha(alpha)
         PositionAttachedSkill(tab)
-        if tab.foreverSkillGroup then
-            UpdateForeverSkillDividers(tab.foreverSkillGroup)
+        if tab.skillSlotClosing then
+            for _, skill in ipairs(tab.skillOwner.attachedSkills) do
+                if skill ~= tab then
+                    PositionAttachedSkill(skill)
+                end
+            end
         end
         if alpha == target then
             tab.fadeTarget = nil
+            tab.skillSlotClosing = nil
             if target == 0 then
                 tab:Hide()
                 if tab.skillExiting then
@@ -1091,6 +1108,9 @@ local function UpdateSpellTab(tab, elapsed)
                 end
                 return
             end
+        end
+        if tab.foreverSkillGroup then
+            UpdateForeverSkillDividers(tab.foreverSkillGroup)
         end
     elseif tab.skillOwner and tab.tabStyle == tabStyles.Panel and tab.skillBorderAlpha and tab.skillBorderAlpha < 1 then
         SetSkillBorderAlpha(tab, math.min(1, tab.skillBorderAlpha + elapsed / SKILL_BORDER_FADE_DURATION))
@@ -1309,6 +1329,7 @@ local function LayoutAttachedSkills(panel)
             end
         elseif previousOwner then
             tab.fadeTarget = nil
+            tab.skillSlotClosing = nil
             tab:SetAlpha(1)
         end
     end
@@ -1413,6 +1434,8 @@ local function UpdatePanel(panel, professions, currentSkillLine, style)
         local exiting = not data and ProfessionSideTabsDB.skillsBesideProfessions
             and button.professionData and owner and owner:IsShown() and button:IsVisible()
         button.skillExiting = exiting or nil
+        -- Keep collapsing the slot until a reversed animation is fully visible again.
+        button.skillSlotClosing = exiting or (data and button.skillSlotClosing) or nil
         if data then
             local attachedSkill = ProfessionSideTabsDB.skillsBesideProfessions and slot > RUNEFORGING_SLOT
             ApplyButtonStyle(button, style, attachedSkill)
