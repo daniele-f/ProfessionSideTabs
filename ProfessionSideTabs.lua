@@ -844,13 +844,13 @@ local function ApplyButtonStyle(button, style, attachedSkill)
     PositionButtonIcon(button, false)
 end
 
-local function GetAttachedSkillSlide(skill)
+local function GetTabSlideOffset(skill)
     return (1 - skill:GetAlpha()) * SKILL_SLIDE_DISTANCE
 end
 
 local function PositionAttachedSkill(skill)
     local owner = skill.skillOwner
-    local offset = skill.attachedOffset - GetAttachedSkillSlide(skill)
+    local offset = skill.attachedOffset - GetTabSlideOffset(skill)
     local step = ATTACHED_SKILL_SIZE - skill.tabStyle.skillOverlap
     for _, previous in ipairs(owner.attachedSkills) do
         if previous == skill then
@@ -894,6 +894,7 @@ local function UpdateAttachedSkillVisibility(owner)
     for _, skill in ipairs(skills) do
         shown = shown or (not skill.skillExiting and skill.mouseOver)
     end
+    shown = shown and owner.rowTabTarget ~= 0
     local visibleFollower, openedSlot = false, false
     for index = #skills, 1, -1 do
         local skill = skills[index]
@@ -914,6 +915,57 @@ local function UpdateAttachedSkillVisibility(owner)
         local group = skills[1].foreverSkillGroup
         if group then
             UpdateForeverSkillDividers(group)
+        end
+    end
+end
+
+local function PositionRowTab(button)
+    button:ClearAllPoints()
+    button:SetPoint("TOPLEFT", button:GetParent(), "TOPLEFT",
+        button.tabStyle.left - GetTabSlideOffset(button), button.tabTop)
+end
+
+local function ClearTabHover(button)
+    button.mouseOver = nil
+    UpdateTabHover(button)
+    if GameTooltip:IsOwned(button) then
+        GameTooltip_Hide()
+    end
+end
+
+local function SetRowTabVisibility(button, shown, opening)
+    if shown then
+        if not button:IsShown() or opening then
+            button:SetAlpha(0)
+            button:Show()
+        end
+        button.rowTabTarget = button:GetAlpha() < 1 and 1 or nil
+    elseif button:IsVisible() then
+        button.rowTabTarget = 0
+        ClearTabHover(button)
+    else
+        button:Hide()
+    end
+end
+
+local function UpdateRowTabAnimation(button, elapsed)
+    local target = button.rowTabTarget
+    if target == nil then
+        return
+    end
+
+    local step = elapsed / SKILL_ANIMATION_DURATION
+    local alpha = button:GetAlpha()
+    alpha = target == 1 and math.min(1, alpha + step) or math.max(0, alpha - step)
+    button:SetAlpha(alpha)
+    PositionRowTab(button)
+    if alpha == target then
+        button.rowTabTarget = nil
+        if target == 0 then
+            button:Hide()
+            button:SetAlpha(1)
+            button.refreshTabs()
+            return true
         end
     end
 end
@@ -973,14 +1025,19 @@ local function CreateTabButton(parent, name, onClick)
     pushedShade:Hide()
     button.pushedShade = pushedShade
 
-    button:SetScript("OnClick", onClick or function(self)
-        if self.slotNumber then
+    button:SetScript("OnClick", function(self, ...)
+        if self.rowTabTarget == 0 then
+            return
+        end
+        if onClick then
+            onClick(self, ...)
+        elseif self.slotNumber then
             OpenProfessionBySlot(self.slotNumber)
         end
     end)
 
     button:SetScript("OnEnter", function(self)
-        if self.skillExiting then
+        if self.skillExiting or self.rowTabTarget == 0 then
             return
         end
         self.mouseOver = true
@@ -1006,6 +1063,10 @@ local function CreateTabButton(parent, name, onClick)
     button:SetScript("OnHide", function(self)
         self.mouseOver = nil
         UpdateTabHover(self)
+        if self.rowTabTarget ~= nil then
+            self.rowTabTarget = nil
+            self:SetAlpha(1)
+        end
         if self.compactSkill then
             self.fadeTarget = nil
             self.skillSlotTransition = nil
@@ -1058,7 +1119,7 @@ local function SyncSpellAction(tab)
         return
     end
 
-    if tab.skillExiting then
+    if tab.skillExiting or tab.rowTabTarget == 0 then
         if tab.spellAction and tab.spellAction:IsShown() then
             tab.spellAction:Hide()
         end
@@ -1071,7 +1132,7 @@ local function SyncSpellAction(tab)
     end
     if tab.compactSkill then
         -- Only the exposed part of the attached skill receives clicks.
-        local overlap = tab.tabStyle.skillOverlap + GetAttachedSkillSlide(tab)
+        local overlap = tab.tabStyle.skillOverlap + GetTabSlideOffset(tab)
         left = left + overlap
         width = width - overlap
     end
@@ -1099,6 +1160,9 @@ local function SyncSpellAction(tab)
 end
 
 local function UpdateSpellTab(tab, elapsed)
+    if UpdateRowTabAnimation(tab, elapsed) then
+        return
+    end
     local target = tab.fadeTarget
     if target then
         local step = elapsed / SKILL_ANIMATION_DURATION
@@ -1123,7 +1187,7 @@ local function UpdateSpellTab(tab, elapsed)
             if target == 0 then
                 tab:Hide()
                 if tab.skillExiting then
-                    tab.refreshSkills()
+                    tab.refreshTabs()
                 end
                 return
             end
@@ -1247,14 +1311,17 @@ local function EnsurePanel(panel, refresh)
     container:Hide()
 
     for i = 1, RUNEFORGING_SLOT do
-        panel.buttons[i] = CreateTabButton(container, prefix .. "Tab" .. i)
+        local button = CreateTabButton(container, prefix .. "Tab" .. i)
+        button.refreshTabs = refresh
+        button:SetScript("OnUpdate", UpdateRowTabAnimation)
+        panel.buttons[i] = button
     end
 
     ConfigureSpellTab(panel.buttons[RUNEFORGING_SLOT], RUNEFORGING_SPELL_ID, "Runeforging")
     for index, skill in ipairs(professionSkills) do
         local slot = RUNEFORGING_SLOT + index
         local button = CreateTabButton(container, prefix .. "Tab" .. slot, skill.tracking and ToggleSkillTracking or nil)
-        button.refreshSkills = refresh
+        button.refreshTabs = refresh
         if skill.tracking then
             button.trackingSkill = skill
             button:EnableMouse(true)
@@ -1268,6 +1335,8 @@ local function EnsurePanel(panel, refresh)
 
     if type(ToggleProfessionsBook) == "function" then
         local overview = CreateTabButton(container, prefix .. "OverviewTab", OpenProfessionsOverview)
+        overview.refreshTabs = refresh
+        overview:SetScript("OnUpdate", UpdateRowTabAnimation)
         overview.icon:SetTexture("Interface\\Spellbook\\Spellbook-Icon")
         overview.professionData = { name = "Professions Overview" }
         overview:Hide()
@@ -1286,9 +1355,9 @@ local function EnsurePanel(panel, refresh)
     end)
 end
 
-local function PlaceTabButton(panel, button, y, style)
-    button:ClearAllPoints()
-    button:SetPoint("TOPLEFT", panel.container, "TOPLEFT", style.left, -7 - y)
+local function PlaceTabButton(button, y, style)
+    button.tabTop = -7 - y
+    PositionRowTab(button)
     return y + style.height + style.gap
 end
 
@@ -1296,7 +1365,7 @@ local function LayoutButtonGroup(panel, slots, y, style)
     for _, slot in ipairs(slots) do
         local button = panel.buttons[slot]
         if button:IsShown() then
-            y = PlaceTabButton(panel, button, y, style)
+            y = PlaceTabButton(button, y, style)
         end
     end
     return y
@@ -1317,7 +1386,7 @@ local function LayoutAttachedSkills(panel)
         panel.buttons[slot].attachedSkills = nil
     end
 
-    local beside = ProfessionSideTabsDB.skillsBesideProfessions
+    local beside = panel.skillsBesideProfessions
     for index, skill in ipairs(professionSkills) do
         local tab = panel.buttons[RUNEFORGING_SLOT + index]
         local previousOwner = tab.skillOwner
@@ -1349,7 +1418,9 @@ local function LayoutAttachedSkills(panel)
         elseif previousOwner then
             tab.fadeTarget = nil
             tab.skillSlotTransition = nil
-            tab:SetAlpha(1)
+            if tab.rowTabTarget == nil then
+                tab:SetAlpha(1)
+            end
         end
     end
     for slot = RUNEFORGING_SLOT + 1, lastTabSlot do
@@ -1380,7 +1451,7 @@ local function LayoutButtons(panel, style)
 
     local primaryStart = 0
     if panel.overview and panel.overview:IsShown() then
-        primaryStart = PlaceTabButton(panel, panel.overview, 0, style)
+        primaryStart = PlaceTabButton(panel.overview, 0, style)
     end
     local primaryEnd = LayoutButtonGroup(panel, primaryProfessionSlots, primaryStart, style)
     local hasPrimary = primaryEnd > 0
@@ -1390,7 +1461,7 @@ local function LayoutButtons(panel, style)
 
     local contentHeight = hasSecondary and secondaryEnd or primaryEnd
     LayoutAttachedSkills(panel)
-    if ProfessionSideTabsDB.skillsBesideProfessions then
+    if panel.skillsBesideProfessions then
         container.professionSkillsDivider:Hide()
         container.secondarySkillsDivider:Hide()
     else
@@ -1419,10 +1490,24 @@ local function LayoutButtons(panel, style)
 
     if hasRuneforging then
         local runeforgingStart = contentHeight + (contentHeight > 0 and style.groupGap or 0)
-        contentHeight = PlaceTabButton(panel, runeforging, runeforgingStart, style)
+        contentHeight = PlaceTabButton(runeforging, runeforgingStart, style)
     end
     container:SetHeight(math.max(contentHeight + PANEL_HEIGHT_PADDING, style.height))
     return UpdateContainerPosition(panel)
+end
+
+local function UpdateSkillPlacement(panel)
+    local beside = ProfessionSideTabsDB.skillsBesideProfessions
+    if panel.skillsBesideProfessions ~= nil and panel.skillsBesideProfessions ~= beside then
+        -- Keep the current anchors until the last skill has finished sliding out.
+        for slot = RUNEFORGING_SLOT + 1, lastTabSlot do
+            if panel.buttons[slot]:IsVisible() then
+                return true
+            end
+        end
+    end
+    panel.skillsBesideProfessions = beside
+    return false
 end
 
 local function UpdatePanel(panel, professions, currentSkillLine, style)
@@ -1435,6 +1520,8 @@ local function UpdatePanel(panel, professions, currentSkillLine, style)
         return
     end
 
+    local opening = not container:IsShown()
+    local changingSkillPlacement = UpdateSkillPlacement(panel)
     local anyButtonShown = false
     if panel.overview then
         local showOverview = ProfessionSideTabsDB.showProfessionsBook
@@ -1442,39 +1529,45 @@ local function UpdatePanel(panel, professions, currentSkillLine, style)
             ApplyButtonStyle(panel.overview, style)
             UpdateButtonState(panel.overview, panel == bookPanel)
         end
-        panel.overview:SetShown(showOverview)
-        anyButtonShown = showOverview
+        SetRowTabVisibility(panel.overview, showOverview, opening)
+        anyButtonShown = panel.overview:IsShown()
     end
 
     for slot = 1, lastTabSlot do
         local button = panel.buttons[slot]
+        local isSkill = slot > RUNEFORGING_SLOT
+        local attachedSkill = isSkill and panel.skillsBesideProfessions
         local data = professions[slot]
+        if isSkill and changingSkillPlacement then
+            data = nil
+        end
         local owner = button.skillOwner
-        local exiting = not data and ProfessionSideTabsDB.skillsBesideProfessions
+        local exiting = not data and attachedSkill
             and button.professionData and owner and owner:IsShown() and button:IsVisible()
         button.skillExiting = exiting or nil
         -- Keep the slot transition active if visibility reverses mid-animation.
         button.skillSlotTransition = exiting or (data and button.skillSlotTransition) or nil
         if data then
-            local attachedSkill = ProfessionSideTabsDB.skillsBesideProfessions and slot > RUNEFORGING_SLOT
             ApplyButtonStyle(button, style, attachedSkill)
             button.slotNumber = slot
             button.professionData = data
             button.icon:SetTexture(data.icon or 134400)
             if not attachedSkill then
-                button:Show()
+                SetRowTabVisibility(button, true, opening)
                 anyButtonShown = true
             end
             local isSelected = (panel == craftingPanel and data.skillLine ~= nil and currentSkillLine == data.skillLine)
                 or (panel == archaeologyPanel and slot == 3)
             UpdateButtonState(button, isSelected)
-        elseif exiting then
-            button.mouseOver = nil
-            UpdateTabHover(button)
-            SyncSpellAction(button)
-            if GameTooltip:IsOwned(button) then
-                GameTooltip_Hide()
+        elseif not attachedSkill and button:IsVisible() then
+            SetRowTabVisibility(button, false)
+            if button.spellAction then
+                SyncSpellAction(button)
             end
+            anyButtonShown = true
+        elseif exiting then
+            ClearTabHover(button)
+            SyncSpellAction(button)
         else
             button.slotNumber = nil
             button.professionData = nil
