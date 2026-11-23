@@ -492,7 +492,11 @@ local function PositionButtonIcon(button, pressed)
     local shift = pressed and 1 or 0
     local xShift = shift + (button.compactSkill and 1 or (isForever and -2 or 0))
     button.icon:ClearAllPoints()
-    button.icon:SetPoint("TOPLEFT", xInset + xShift, -yInset - shift)
+    local leftInset = xInset + xShift
+    if button.foreverSkillGroup and not button.foreverGroupUnmasked then
+        leftInset = leftInset - 2
+    end
+    button.icon:SetPoint("TOPLEFT", leftInset, -yInset - shift)
     button.icon:SetPoint("BOTTOMRIGHT", -xInset + xShift, yInset - shift)
 end
 
