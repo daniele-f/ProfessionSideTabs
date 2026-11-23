@@ -98,11 +98,141 @@ local professionSkills = {
     { key = "fishing", name = "Fishing", spellID = 131474, professionSlot = 4 },
     { key = "survey", name = "Survey", spellID = 80451, professionSlot = 3 },
 }
-local primarySkillSlots, secondarySkillSlots = {}, {}
+local primarySkillSlots, secondarySkillSlots, skillSlotsByKey = {}, {}, {}
 local lastTabSlot = RUNEFORGING_SLOT + #professionSkills
 for index = 1, #professionSkills do
     local slots = professionSkills[index].professionID and primarySkillSlots or secondarySkillSlots
-    slots[#slots + 1] = RUNEFORGING_SLOT + index
+    local slot = RUNEFORGING_SLOT + index
+    slots[#slots + 1] = slot
+    skillSlotsByKey[professionSkills[index].key] = slot
+end
+
+local tabOrderGroups = {
+    { key = "primaryProfessions", divider = "professionDivider", slots = primaryProfessionSlots },
+    { key = "secondaryProfessions", divider = "skillsDivider", slots = secondaryProfessionSlots },
+    { key = "primarySkills", divider = "secondarySkillsDivider", slots = primarySkillSlots },
+    { key = "secondarySkills", divider = "runeforgingDivider", slots = secondarySkillSlots },
+}
+
+local defaultSeparators = {}
+for _, group in ipairs(tabOrderGroups) do
+    defaultSeparators[group.divider] = true
+end
+
+local function IsCustomSeparator(id)
+    return type(id) == "string" and id:match("^separator:%d+$") ~= nil
+end
+
+local function IsTabOrderSeparator(id)
+    return defaultSeparators[id] or IsCustomSeparator(id)
+end
+
+local function GetOrderedTabIDs(defaults, saved)
+    local remaining, order = {}, {}
+    for _, id in ipairs(defaults) do
+        remaining[id] = true
+    end
+    if type(saved) == "table" then
+        for _, id in ipairs(saved) do
+            if remaining[id] then
+                order[#order + 1] = id
+                remaining[id] = nil
+            end
+        end
+    end
+    for _, id in ipairs(defaults) do
+        if remaining[id] then
+            order[#order + 1] = id
+            remaining[id] = nil
+        end
+    end
+    return order
+end
+
+local function GetTabOrderID(slot, data)
+    if slot <= #primaryProfessionSlots then
+        return data.skillLine
+    elseif slot > RUNEFORGING_SLOT then
+        return professionSkills[slot - RUNEFORGING_SLOT].key
+    end
+    return slot
+end
+
+local function GetTabOrder()
+    local saved = ProfessionSideTabsDB.tabOrder
+    local defaults = { "overview" }
+    for _, group in ipairs(tabOrderGroups) do
+        local ids = {}
+        if group.slots == primaryProfessionSlots then
+            local seen = {}
+            -- Preserve the default character slot order until a custom order is saved.
+            for _, slot in ipairs(primaryProfessionSlots) do
+                local profession = primaryProfessions[slot]
+                if profession then
+                    ids[#ids + 1] = profession.skillLine
+                    seen[profession.skillLine] = true
+                end
+            end
+            for _, profession in ipairs(primaryProfessionOptions) do
+                if not seen[profession.skillLine] then
+                    ids[#ids + 1] = profession.skillLine
+                end
+            end
+        else
+            for _, slot in ipairs(group.slots) do
+                ids[#ids + 1] = GetTabOrderID(slot)
+            end
+        end
+        -- Fold orders saved by the grouped editor into the initial flat list.
+        for _, id in ipairs(GetOrderedTabIDs(ids, saved[group.key])) do
+            defaults[#defaults + 1] = id
+        end
+        if not saved.removedSeparators or not saved.removedSeparators[group.divider] then
+            defaults[#defaults + 1] = group.divider
+        end
+    end
+    defaults[#defaults + 1] = RUNEFORGING_SLOT
+    if type(saved.entries) == "table" then
+        for _, id in ipairs(saved.entries) do
+            if IsCustomSeparator(id) then
+                defaults[#defaults + 1] = id
+            end
+        end
+    end
+    return GetOrderedTabIDs(defaults, saved.entries)
+end
+
+local function AddTabOrderSeparator()
+    local saved = ProfessionSideTabsDB.tabOrder
+    local order = GetTabOrder()
+    local nextID = tonumber(saved.nextSeparatorID) or 0
+    for _, id in ipairs(order) do
+        if IsCustomSeparator(id) then
+            nextID = math.max(nextID, tonumber(id:match("%d+$")))
+        end
+    end
+    saved.nextSeparatorID = nextID + 1
+    order[#order + 1] = "separator:" .. saved.nextSeparatorID
+    saved.entries = order
+end
+
+local function RemoveTabOrderSeparator(id)
+    if not IsTabOrderSeparator(id) then
+        return
+    end
+    local saved = ProfessionSideTabsDB.tabOrder
+    local order = GetTabOrder()
+    for index, entry in ipairs(order) do
+        if entry == id then
+            table.remove(order, index)
+            break
+        end
+    end
+    if defaultSeparators[id] then
+        saved.removedSeparators = saved.removedSeparators or {}
+        saved.removedSeparators[id] = true
+    end
+    saved.entries = order
 end
 
 local function EnsureDB()
@@ -116,6 +246,10 @@ local function EnsureDB()
 
     if type(ProfessionSideTabsDB.shownProfessionSkills) ~= "table" then
         ProfessionSideTabsDB.shownProfessionSkills = {}
+    end
+
+    if type(ProfessionSideTabsDB.tabOrder) ~= "table" then
+        ProfessionSideTabsDB.tabOrder = {}
     end
 
     ProfessionSideTabsDB.skillsBesideProfessions = ProfessionSideTabsDB.skillsBesideProfessions ~= false
@@ -1312,10 +1446,8 @@ local function EnsurePanel(panel, refresh)
     local trim = CreatePanelTrim(container)
     container.top, container.right, container.bottom = trim.top, trim.right, trim.bottom
 
-    container.divider = CreateDivider(container)
-    container.professionSkillsDivider = CreateDivider(container)
-    container.secondarySkillsDivider = CreateDivider(container)
-    container.runeforgingDivider = CreateDivider(container)
+    container.dividers = {}
+
 
     container:Hide()
 
@@ -1370,16 +1502,6 @@ local function PlaceTabButton(button, y, style)
     return y + style.height + style.gap
 end
 
-local function LayoutButtonGroup(panel, slots, y, style)
-    for _, slot in ipairs(slots) do
-        local button = panel.buttons[slot]
-        if button:IsShown() then
-            y = PlaceTabButton(button, y, style)
-        end
-    end
-    return y
-end
-
 local function PositionDivider(divider, container, groupEnd, shown)
     if shown then
         local top = groupEnd + DIVIDER_TOP_GAP
@@ -1390,14 +1512,15 @@ local function PositionDivider(divider, container, groupEnd, shown)
     divider:SetShown(shown)
 end
 
-local function LayoutAttachedSkills(panel)
+local function LayoutAttachedSkills(panel, orderedSkills)
     for slot = 1, 5 do
         panel.buttons[slot].attachedSkills = nil
     end
 
     local beside = panel.skillsBesideProfessions
-    for index, skill in ipairs(professionSkills) do
-        local tab = panel.buttons[RUNEFORGING_SLOT + index]
+    for _, slot in ipairs(orderedSkills) do
+        local skill = professionSkills[slot - RUNEFORGING_SLOT]
+        local tab = panel.buttons[slot]
         local previousOwner = tab.skillOwner
         tab.skillOwner = nil
         if beside then
@@ -1432,7 +1555,7 @@ local function LayoutAttachedSkills(panel)
             end
         end
     end
-    for slot = RUNEFORGING_SLOT + 1, lastTabSlot do
+    for _, slot in ipairs(orderedSkills) do
         local tab = panel.buttons[slot]
         local skills = tab.skillOwner and tab.skillOwner.attachedSkills
         if tab.tabStyle == tabStyles.Forever and skills and #skills > 1 then
@@ -1458,49 +1581,47 @@ local function LayoutButtons(panel, style)
     container.right:SetShown(isPanel)
     container.bottom:SetShown(isPanel)
 
-    local primaryStart = 0
-    if panel.overview and panel.overview:IsShown() then
-        primaryStart = PlaceTabButton(panel.overview, 0, style)
+    for _, divider in pairs(container.dividers) do
+        divider:Hide()
     end
-    local primaryEnd = LayoutButtonGroup(panel, primaryProfessionSlots, primaryStart, style)
-    local hasPrimary = primaryEnd > 0
-    local secondaryStart = primaryEnd + (hasPrimary and style.groupGap or 0)
-    local secondaryEnd = LayoutButtonGroup(panel, secondaryProfessionSlots, secondaryStart, style)
-    local hasSecondary = secondaryEnd > secondaryStart
 
-    local contentHeight = hasSecondary and secondaryEnd or primaryEnd
-    LayoutAttachedSkills(panel)
-    if panel.skillsBesideProfessions then
-        container.professionSkillsDivider:Hide()
-        container.secondarySkillsDivider:Hide()
-    else
-        local skillsStart = contentHeight + (contentHeight > 0 and style.groupGap or 0)
-        local primarySkillsEnd = LayoutButtonGroup(panel, primarySkillSlots, skillsStart, style)
-        local hasPrimarySkills = primarySkillsEnd > skillsStart
-        local secondarySkillsStart = hasPrimarySkills and (primarySkillsEnd + style.groupGap) or skillsStart
-        local secondarySkillsEnd = LayoutButtonGroup(panel, secondarySkillSlots, secondarySkillsStart, style)
-        local hasSecondarySkills = secondarySkillsEnd > secondarySkillsStart
-        PositionDivider(container.professionSkillsDivider, container, contentHeight,
-            isPanel and (hasPrimarySkills or hasSecondarySkills) and contentHeight > 0)
-        PositionDivider(container.secondarySkillsDivider, container, primarySkillsEnd,
-            isPanel and hasPrimarySkills and hasSecondarySkills)
-        if hasSecondarySkills then
-            contentHeight = secondarySkillsEnd
-        elseif hasPrimarySkills then
-            contentHeight = primarySkillsEnd
+    local buttons = {}
+    if panel.overview and panel.overview:IsShown() then
+        buttons.overview = panel.overview
+    end
+    for slot, button in ipairs(panel.buttons) do
+        if button:IsShown() and button.professionData
+            and (not panel.skillsBesideProfessions or slot <= RUNEFORGING_SLOT) then
+            buttons[GetTabOrderID(slot, button.professionData)] = button
         end
     end
 
-    local runeforging = panel.buttons[RUNEFORGING_SLOT]
-    local hasRuneforging = runeforging:IsShown()
-    PositionDivider(container.divider, container, primaryEnd, isPanel and hasPrimary and hasSecondary)
-    PositionDivider(container.runeforgingDivider, container, contentHeight,
-        isPanel and hasRuneforging and contentHeight > 0)
-
-    if hasRuneforging then
-        local runeforgingStart = contentHeight + (contentHeight > 0 and style.groupGap or 0)
-        contentHeight = PlaceTabButton(runeforging, runeforgingStart, style)
+    local contentHeight, dividerCount = 0, 0
+    local pendingDivider = false
+    local orderedSkills = {}
+    for _, id in ipairs(GetTabOrder()) do
+        local skillSlot = skillSlotsByKey[id]
+        if skillSlot then
+            orderedSkills[#orderedSkills + 1] = skillSlot
+        end
+        if buttons[id] then
+            if pendingDivider then
+                if isPanel then
+                    dividerCount = dividerCount + 1
+                    local divider = container.dividers[dividerCount] or CreateDivider(container)
+                    container.dividers[dividerCount] = divider
+                    PositionDivider(divider, container, contentHeight, true)
+                end
+                contentHeight = contentHeight + style.groupGap
+                pendingDivider = false
+            end
+            contentHeight = PlaceTabButton(buttons[id], contentHeight, style)
+        elseif contentHeight > 0 and IsTabOrderSeparator(id) then
+            pendingDivider = true
+        end
     end
+
+    LayoutAttachedSkills(panel, orderedSkills)
     container:SetHeight(math.max(contentHeight + PANEL_HEIGHT_PADDING, style.height))
     return UpdateContainerPosition(panel)
 end
@@ -1661,7 +1782,28 @@ local function UpdateButtons()
     end
 end
 
-local function CreateStandaloneSettingsWindow(title, height)
+local function CreateSettingsTabs(parent, anchor, x, y, selectTab)
+    local tabLabels = { "Settings", "Tab Order" }
+    local previousTab
+    parent.tabPadding = 16
+    for index, label in ipairs(tabLabels) do
+        local tab = CreateFrame("Button", nil, parent, "PanelTopTabButtonTemplate")
+        tab:SetID(index)
+        tab:SetText(label)
+        if previousTab then
+            tab:SetPoint("LEFT", previousTab, "RIGHT", 4, 0)
+        else
+            tab:SetPoint("BOTTOMLEFT", anchor, "TOPLEFT", x, y)
+        end
+        tab:SetScript("OnClick", function(self)
+            selectTab(self:GetID())
+        end)
+        previousTab = tab
+    end
+    PanelTemplates_SetNumTabs(parent, #tabLabels)
+end
+
+local function CreateStandaloneSettingsWindow(title, height, selectTab)
     local frameName = addonName .. "StandaloneSettings"
     local window = CreateFrame("Frame", frameName, UIParent, "ButtonFrameTemplate")
     window:Hide()
@@ -1685,9 +1827,17 @@ local function CreateStandaloneSettingsWindow(title, height)
     window:SetMovable(true)
     window:SetClampedToScreen(true)
     window:SetTitle(title)
-    ButtonFrameTemplate_HideAttic(window)
+    ButtonFrameTemplate_ShowAttic(window)
     ButtonFrameTemplate_HidePortrait(window)
     ButtonFrameTemplate_HideButtonBar(window)
+
+    CreateSettingsTabs(window, window.Inset, 15, -1, selectTab)
+
+    local viewport = CreateFrame("Frame", nil, window)
+    viewport:SetClipsChildren(true)
+    viewport:SetPoint("TOPLEFT", window.Inset, "TOPLEFT", 15, -6)
+    viewport:SetPoint("BOTTOMRIGHT", window.Inset, "BOTTOMRIGHT", -6, 10)
+    window.settingsViewport = viewport
 
     local titleBar = window.TitleContainer
     titleBar:SetHitRectInsets(0, window.CloseButton:GetWidth(), 0, 0)
@@ -1708,6 +1858,218 @@ local function CreateStandaloneSettingsWindow(title, height)
     return window
 end
 
+local function GetTabOrderEntries()
+    local entries = {
+        overview = { name = "Professions Overview", icon = "Interface\\Spellbook\\Spellbook-Icon" },
+        [RUNEFORGING_SLOT] = { name = "Runeforging", icon = C_Spell.GetSpellTexture(RUNEFORGING_SPELL_ID) },
+    }
+    for _, profession in ipairs(primaryProfessionOptions) do
+        local id = profession.skillLine
+        local journal = professionJournalSpells[id]
+        local texture = journal and C_Spell.GetSpellTexture(journal)
+        if not texture and C_TradeSkillUI.GetTradeSkillTexture then
+            texture = C_TradeSkillUI.GetTradeSkillTexture(id)
+        end
+        entries[id] = { name = primaryCheckboxes[id].professionName, icon = texture }
+    end
+    for _, profession in pairs(primaryProfessions) do
+        entries[profession.skillLine] = { name = profession.name, icon = profession.icon }
+    end
+    for _, slot in ipairs(secondaryProfessionSlots) do
+        local profession = GetProfessionDataBySlot(slot)
+        entries[slot] = { name = secondaryProfessions[slot].name, icon = profession and profession.icon }
+    end
+    for _, skill in ipairs(professionSkills) do
+        entries[skill.key] = { name = skill.name, icon = C_Spell.GetSpellTexture(skill.spellID) }
+    end
+
+    return entries
+end
+
+local function CreateTabOrderEditor(page, scrollFrame, onHeightChanged)
+    local editor = CreateFrame("Frame", nil, page)
+    local listWidth, rowHeight = 315, 24
+    local rowStart = 54
+    editor:SetWidth(listWidth)
+
+    local reset = CreateFrame("Button", nil, editor, "UIPanelButtonTemplate")
+    reset:SetPoint("TOPLEFT")
+    reset:SetSize(105, 24)
+    reset:SetText("Reset order")
+
+    local add = CreateFrame("Button", nil, editor, "UIPanelButtonTemplate")
+    add:SetSize(115, 24)
+    add:SetText("Add separator")
+
+    local hint = editor:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    hint:SetPoint("TOPLEFT", reset, "BOTTOMLEFT", 0, -8)
+    hint:SetText("Drag tabs and separators to reorder them.")
+
+    local list = CreateFrame("Frame", nil, editor)
+    list:SetPoint("TOPLEFT", 0, -rowStart)
+    list:SetWidth(listWidth)
+    local footerGap = 8
+    add:SetPoint("TOPLEFT", list, "BOTTOMLEFT", 0, -footerGap)
+    local marker = list:CreateTexture(nil, "OVERLAY")
+    marker:SetColorTexture(1, 0.82, 0, 1)
+    marker:SetSize(listWidth, 2)
+    marker:Hide()
+
+    local rows = {}
+    local order, draggedIndex
+    local function CancelDrag()
+        if draggedIndex then
+            rows[draggedIndex]:SetAlpha(1)
+            draggedIndex = nil
+        end
+        list:SetScript("OnUpdate", nil)
+        marker:Hide()
+    end
+
+    local function GetDropIndex()
+        if not draggedIndex or not list:IsMouseOver() or not scrollFrame:IsMouseOver() then
+            return
+        end
+        local _, cursorY = GetCursorPosition()
+        local offset = list:GetTop() - cursorY / list:GetEffectiveScale()
+        return math.min(#order, math.max(1, math.floor(offset / rowHeight) + 1))
+    end
+
+    local function UpdateDropMarker(_, elapsed)
+        if scrollFrame:IsMouseOver() then
+            local _, cursorY = GetCursorPosition()
+            cursorY = cursorY / scrollFrame:GetEffectiveScale()
+            local edge, speed = 28, 240
+            local direction = 0
+            if cursorY > scrollFrame:GetTop() - edge then
+                direction = -1
+            elseif cursorY < scrollFrame:GetBottom() + edge then
+                direction = 1
+            end
+            if direction ~= 0 then
+                local offset = scrollFrame:GetVerticalScroll() + direction * speed * elapsed
+                scrollFrame:SetVerticalScroll(math.max(0, math.min(scrollFrame:GetVerticalScrollRange(), offset)))
+            end
+        end
+
+        local target = GetDropIndex()
+        if not target or target == draggedIndex then
+            marker:Hide()
+            return
+        end
+        local edge = target > draggedIndex and "BOTTOMLEFT" or "TOPLEFT"
+        marker:ClearAllPoints()
+        marker:SetPoint("LEFT", rows[target], edge)
+        marker:Show()
+    end
+
+    local function UpdateRemoveButton(row)
+        row.removeSeparator:SetShown(row.separatorID ~= nil and not draggedIndex
+            and scrollFrame:IsMouseOver() and row:IsMouseOver())
+    end
+
+    local RefreshOrder
+    local function CreateRow(index)
+        local row = CreateFrame("Button", nil, list)
+        row:SetPoint("TOPLEFT", 0, -(index - 1) * rowHeight)
+        row:SetSize(listWidth, rowHeight)
+        local background = row:CreateTexture(nil, "BACKGROUND")
+        background:SetAllPoints()
+        background:SetColorTexture(1, 1, 1, 0.04)
+        row:SetHighlightTexture("Interface\\Buttons\\UI-Listbox-Highlight2", "ADD")
+        row.icon = row:CreateTexture(nil, "ARTWORK")
+        row.icon:SetPoint("LEFT", 5, 0)
+        row.icon:SetSize(18, 18)
+        row.label = row:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+        row.label:SetPoint("LEFT", row.icon, "RIGHT", 7, 0)
+        row.divider = CreateDivider(row)
+        row.divider:SetPoint("LEFT", row.label, "RIGHT", 8, 0)
+        row.divider:SetPoint("RIGHT", row, "RIGHT", -28, 0)
+
+        local remove = CreateFrame("Button", nil, row, "UIPanelCloseButtonNoScripts")
+        remove:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+        remove:SetSize(18, 18)
+        remove:Hide()
+        row.removeSeparator = remove
+        row:SetScript("OnEnter", UpdateRemoveButton)
+        row:SetScript("OnLeave", UpdateRemoveButton)
+        remove:SetScript("OnLeave", function()
+            UpdateRemoveButton(row)
+        end)
+        remove:SetScript("OnClick", function()
+            if row.separatorID then
+                RemoveTabOrderSeparator(row.separatorID)
+                RefreshOrder()
+                UpdateButtons()
+            end
+        end)
+
+        row:RegisterForDrag("LeftButton")
+        row:SetScript("OnDragStart", function(self)
+            CancelDrag()
+            draggedIndex = index
+            self:SetAlpha(0.5)
+            remove:Hide()
+            list:SetScript("OnUpdate", UpdateDropMarker)
+        end)
+        row:SetScript("OnDragStop", function()
+            local from, to = draggedIndex, GetDropIndex()
+            CancelDrag()
+            if to and from ~= to then
+                table.insert(order, to, table.remove(order, from))
+                ProfessionSideTabsDB.tabOrder.entries = order
+                RefreshOrder()
+                UpdateButtons()
+            elseif to then
+                UpdateRemoveButton(rows[to])
+            end
+        end)
+        return row
+    end
+
+    RefreshOrder = function()
+        CancelDrag()
+        order = GetTabOrder()
+        local entries = GetTabOrderEntries()
+        for index, id in ipairs(order) do
+            local row = rows[index] or CreateRow(index)
+            rows[index] = row
+            local entry = entries[id]
+            row.separatorID = IsTabOrderSeparator(id) and id or nil
+            row.icon:SetTexture(entry and entry.icon)
+            row.label:SetText(row.separatorID and "Separator" or entry.name)
+            row.divider:SetShown(row.separatorID ~= nil)
+            row:Show()
+        end
+        for index = #order + 1, #rows do
+            rows[index]:Hide()
+        end
+        list:SetHeight(#order * rowHeight)
+        editor:SetHeight(rowStart + list:GetHeight() + footerGap + add:GetHeight())
+        onHeightChanged(editor:GetHeight())
+        for index = 1, #order do
+            UpdateRemoveButton(rows[index])
+        end
+    end
+
+    add:SetScript("OnClick", function()
+        AddTabOrderSeparator()
+        RefreshOrder()
+        UpdateButtons()
+        scrollFrame:UpdateScrollChildRect()
+        scrollFrame:SetVerticalScroll(scrollFrame:GetVerticalScrollRange())
+    end)
+    reset:SetScript("OnClick", function()
+        ProfessionSideTabsDB.tabOrder = {}
+        RefreshOrder()
+        UpdateButtons()
+    end)
+    editor:SetScript("OnShow", RefreshOrder)
+    editor:SetScript("OnHide", CancelDrag)
+    RefreshOrder()
+    return editor, RefreshOrder
+end
+
 local function RegisterSettings()
     -- Keep the controls out of the shared setting lookup used by action-bar mouse clicks.
     local title = "Profession Side Tabs"
@@ -1716,6 +2078,13 @@ local function RegisterSettings()
     local canvasTitle = canvas:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
     canvasTitle:SetPoint("TOPLEFT", 24, -20)
     canvasTitle:SetText(title)
+
+    local dockedInset = CreateFrame("Frame", nil, canvas, "InsetFrameTemplate")
+    dockedInset:SetPoint("TOPLEFT", canvas, "TOPLEFT", 8, -76)
+    dockedInset:SetPoint("BOTTOMRIGHT", canvas, "BOTTOMRIGHT", -10, 6)
+    dockedInset.Bg:Hide()
+    dockedInset:SetClipsChildren(true)
+
     local scrollFrame = CreateFrame("ScrollFrame", nil, canvas, "UIPanelScrollFrameTemplate")
     local content = CreateFrame("Frame", nil, scrollFrame)
     content:SetSize(1, 1)
@@ -1723,15 +2092,14 @@ local function RegisterSettings()
     scrollFrame:SetScript("OnSizeChanged", function(_, width)
         content:SetWidth(math.max(1, width))
     end)
-    scrollFrame:SetPoint("TOPLEFT", canvas, "TOPLEFT", 0, -36)
-    scrollFrame:SetPoint("BOTTOMRIGHT", canvas, "BOTTOMRIGHT", -30, 8)
-
     local page = CreateFrame("Frame", nil, content)
+    page:SetAllPoints()
+
     local function DockSettingsPage()
-        page:SetParent(content)
-        page:ClearAllPoints()
-        page:SetPoint("TOPLEFT", content, "TOPLEFT")
-        page:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT")
+        scrollFrame:SetParent(dockedInset)
+        scrollFrame:ClearAllPoints()
+        scrollFrame:SetPoint("TOPLEFT", canvas, "TOPLEFT", 8, -82)
+        scrollFrame:SetPoint("BOTTOMRIGHT", canvas, "BOTTOMRIGHT", -40, 12)
     end
     DockSettingsPage()
 
@@ -1915,9 +2283,35 @@ local function RegisterSettings()
         return "Large"
     end)
     local sizeSlider = AddPanelSlider("panelSize", sizeOptions, "Small")
-    content:SetHeight(-y + sizeSlider:GetHeight() + 12)
+    local settingsHeight = -y + sizeSlider:GetHeight() + 12
+    local standaloneHeight = settingsHeight + 50
+
+    local selectedSettingsTab = 1
+    local orderEditor, refreshOrder = CreateTabOrderEditor(content, scrollFrame, function(height)
+        if selectedSettingsTab == 2 then
+            content:SetHeight(height + 36)
+        end
+    end)
+    orderEditor:SetPoint("TOPLEFT", content, "TOPLEFT", optionX, -20)
+
+    local function ShowSettingsPage(tab)
+        selectedSettingsTab = tab
+        page:SetShown(tab == 1)
+        orderEditor:SetShown(tab == 2)
+        content:SetHeight(tab == 1 and settingsHeight or orderEditor:GetHeight() + 36)
+        scrollFrame:SetVerticalScroll(0)
+    end
+
+    local function SelectDockedTab(tab)
+        PanelTemplates_SetTab(canvas, tab)
+        ShowSettingsPage(tab)
+    end
+    CreateSettingsTabs(canvas, canvas, headingX, -76, SelectDockedTab)
+    SelectDockedTab(1)
 
     function canvas:OnDefault()
+        ProfessionSideTabsDB.tabOrder = {}
+        refreshOrder()
         ProfessionSideTabsDB.hiddenPrimaryProfessions = {}
         ProfessionSideTabsDB.shownProfessionSkills = {}
         ProfessionSideTabsDB.skillsBesideProfessions = true
@@ -1942,6 +2336,11 @@ local function RegisterSettings()
     end
 
     local standalone
+    local function SelectStandaloneTab(tab)
+        PanelTemplates_SetTab(standalone, tab)
+        ShowSettingsPage(tab)
+    end
+
     canvas:SetScript("OnShow", function()
         if standalone then
             standalone:Hide()
@@ -1949,6 +2348,7 @@ local function RegisterSettings()
             positionSlider:SetWidth(dockedSliderWidth)
             sizeSlider:SetWidth(dockedSliderWidth)
         end
+        SelectDockedTab(1)
     end)
 
     toggleStandaloneSettings = function(resetPosition)
@@ -1965,19 +2365,22 @@ local function RegisterSettings()
         end
 
         if not standalone then
-            standalone = CreateStandaloneSettingsWindow(title, content:GetHeight() + 50)
+            standalone = CreateStandaloneSettingsWindow(title, standaloneHeight, SelectStandaloneTab)
         elseif resetPosition then
             standalone:StopMovingOrSizing()
             standalone:ClearAllPoints()
             standalone:SetPoint("CENTER", UIParent, "CENTER")
         end
 
-        page:SetParent(standalone)
-        page:ClearAllPoints()
-        page:SetPoint("TOPLEFT", standalone, "TOPLEFT", 24, -20)
-        page:SetPoint("BOTTOMRIGHT", standalone, "BOTTOMRIGHT", -24, 16)
+        local viewport = standalone.settingsViewport
+        scrollFrame:SetParent(viewport)
+        scrollFrame:ClearAllPoints()
+        scrollFrame:SetPoint("TOPLEFT", viewport, "TOPLEFT")
+        -- Leave room for the scrollbar, which extends beyond the scroll frame.
+        scrollFrame:SetPoint("BOTTOMRIGHT", viewport, "BOTTOMRIGHT", -30, 0)
         positionSlider:SetWidth(230)
         sizeSlider:SetWidth(230)
+        SelectStandaloneTab(1)
         standalone:Show()
     end
 
